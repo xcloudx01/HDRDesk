@@ -42,7 +42,7 @@ class FakeRegistry:
             return False
 
     def OpenKey(self, _root, path, *_):
-        kind = path.split(r"\")[-1].split(".")[-1]
+        kind = path.rsplit(chr(92), 1)[-1].split(".")[-1]
         if kind not in self.values:
             raise FileNotFoundError(path)
         return self.Key(self, kind)
