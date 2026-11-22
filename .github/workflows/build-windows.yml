@@ -9,6 +9,8 @@ on:
       - displaycore.py
       - nvescape.py
       - nvhdr.py
+      - assets/HDRDesk.ico
+      - tools/verify_icon.py
       - .github/workflows/build-windows.yml
   push:
     branches: [main]
@@ -17,6 +19,8 @@ on:
       - displaycore.py
       - nvescape.py
       - nvhdr.py
+      - assets/HDRDesk.ico
+      - tools/verify_icon.py
       - .github/workflows/build-windows.yml
 
 permissions:
@@ -46,13 +50,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m py_compile HDRDesk.pyw displaycore.py nvescape.py nvhdr.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -m PyInstaller --clean --noconfirm --onefile --windowed --name HDRDesk HDRDesk.pyw
+          python -m PyInstaller --clean --noconfirm --onefile --windowed --name HDRDesk --icon assets/HDRDesk.ico --add-data "assets/HDRDesk.ico:assets" HDRDesk.pyw
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Validate executable format
         id: hash
         shell: pwsh
         run: |
           python -c "import pathlib, struct; p=pathlib.Path('dist/HDRDesk.exe'); b=p.read_bytes(); assert b[:2]==b'MZ'; o=struct.unpack_from('<I',b,60)[0]; assert b[o:o+4]==b'PE\x00\x00'; assert struct.unpack_from('<H',b,o+4)[0]==0x8664; assert struct.unpack_from('<H',b,o+24+68)[0]==2; print(p, len(b), 'bytes; Windows x64 GUI executable')"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/verify_icon.py assets/HDRDesk.ico dist/HDRDesk.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $hash = (Get-FileHash dist/HDRDesk.exe -Algorithm SHA256).Hash
           Add-Content -Path $env:GITHUB_OUTPUT -Value "sha256=$hash" -Encoding utf8

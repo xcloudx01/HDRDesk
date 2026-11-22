@@ -27,6 +27,7 @@ except Exception:
 
 HERE = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
 STATE = os.path.join(HERE, "settings.json")
+ICON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "HDRDesk.ico")
 DEFAULTS = {"brightness": 0, "contrast": 0, "gamma": 100, "x": None, "y": None, "hdr_open": False}
 
 HDR_KEYS = ("peak", "midgrey", "contrast", "saturation")
@@ -450,6 +451,14 @@ class App:
 
 if __name__ == "__main__":
     os.chdir(HERE)
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("HDRDesk.HDRDesk")
+    except (AttributeError, OSError):
+        pass
     root = tk.Tk()
+    try:
+        root.iconbitmap(default=ICON)
+    except (tk.TclError, OSError):
+        pass
     App(root)
     root.mainloop()
