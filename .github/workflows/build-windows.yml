@@ -30,6 +30,9 @@ jobs:
   build:
     runs-on: windows-latest
     timeout-minutes: 20
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      sha256: ${{ steps.hash.outputs.sha256 }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -46,32 +49,64 @@ jobs:
           python -m PyInstaller --clean --noconfirm --onefile --windowed --name HDRDesk HDRDesk.pyw
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Validate executable format
+        id: hash
         shell: pwsh
         run: |
           python -c "import pathlib, struct; p=pathlib.Path('dist/HDRDesk.exe'); b=p.read_bytes(); assert b[:2]==b'MZ'; o=struct.unpack_from('<I',b,60)[0]; assert b[o:o+4]==b'PE\x00\x00'; assert struct.unpack_from('<H',b,o+4)[0]==0x8664; assert struct.unpack_from('<H',b,o+24+68)[0]==2; print(p, len(b), 'bytes; Windows x64 GUI executable')"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Get-FileHash dist/HDRDesk.exe -Algorithm SHA256
-      - uses: actions/upload-artifact@v4
+          $hash = (Get-FileHash dist/HDRDesk.exe -Algorithm SHA256).Hash
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "sha256=$hash" -Encoding utf8
+          Write-Host "Built executable SHA256: $hash"
+      - uses: actions/upload-artifact@v7
+        id: upload
         with:
           name: HDRDesk-windows-x64
           path: dist/HDRDesk.exe
           if-no-files-found: error
-  publish:
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+          archive: true
+          compression-level: 0
+  verify:
     needs: build
     runs-on: windows-latest
     timeout-minutes: 10
     permissions:
+      actions: read
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          github-token: ${{ github.token }}
+          path: artifact-check
+      - name: Verify artifact round trip
+        shell: pwsh
+        env:
+          EXPECTED_SHA256: ${{ needs.build.outputs.sha256 }}
+        run: |
+          if (-not $env:EXPECTED_SHA256) { throw 'Missing build SHA256.' }
+          $downloaded = (Get-FileHash artifact-check/HDRDesk.exe -Algorithm SHA256).Hash
+          if ($env:EXPECTED_SHA256 -ne $downloaded) { throw 'Artifact SHA256 mismatch.' }
+          Write-Host "Verified artifact SHA256: $downloaded"
+  publish:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: [build, verify]
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
-          name: HDRDesk-windows-x64
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          github-token: ${{ github.token }}
           path: dist
       - name: Publish executable to repository
         shell: pwsh
+        env:
+          EXPECTED_SHA256: ${{ needs.build.outputs.sha256 }}
         run: |
+          if (-not $env:EXPECTED_SHA256 -or (Get-FileHash dist/HDRDesk.exe -Algorithm SHA256).Hash -ne $env:EXPECTED_SHA256) { throw 'Artifact SHA256 mismatch.' }
           git fetch origin main
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if ((git rev-parse HEAD) -ne (git rev-parse origin/main)) {
