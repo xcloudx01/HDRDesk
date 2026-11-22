@@ -11,6 +11,7 @@ Keyboard    : Up/Down select slider, Left/Right nudge (1% of range), Shift = fin
 import ctypes
 import json
 import os
+import sys
 import time
 import tkinter as tk
 from tkinter import ttk
@@ -24,7 +25,7 @@ try:
 except Exception:
     pass
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
 STATE = os.path.join(HERE, "settings.json")
 DEFAULTS = {"brightness": 0, "contrast": 0, "gamma": 100, "x": None, "y": None, "hdr_open": False}
 

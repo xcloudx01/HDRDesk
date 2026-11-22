@@ -18,6 +18,12 @@ Adjust desktop brightness, contrast, gamma, Windows SDR content brightness, and 
 
 ## Quick start
 
+### Portable Windows executable (x64)
+
+The [Windows build workflow](../../actions/workflows/build-windows.yml) packages HDRDesk as a single, windowed `HDRDesk.exe` and publishes it to the repository root on successful builds. Once available, [download HDRDesk.exe](../../raw/main/HDRDesk.exe). No Python installation is required for the executable. Place it in a writable folder; `settings.json` is saved alongside it. The executable is unsigned, so Windows may display a SmartScreen warning.
+
+### Run from source
+
 1. Download or clone the repository and keep its Python files together.
 2. Install Python 3 for Windows with Tcl/Tk support (included in the standard Python installer).
 3. Double-click `HDRDesk.pyw`, or run:
