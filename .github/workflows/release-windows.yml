@@ -1,0 +1,71 @@
+name: Publish Windows release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/release-windows.yml
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release tag (e.g. v0.1.1)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hdrdesk-windows-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ inputs.version || 'v0.1.0' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate packaged executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          python - <<'PY'
+          import pathlib, struct
+          b = pathlib.Path("HDRDesk.exe").read_bytes()
+          assert b[:2] == b"MZ"
+          o = struct.unpack_from("<I", b, 60)[0]
+          assert b[o:o+4] == b"PE\x00\x00"
+          assert struct.unpack_from("<H", b, o+4)[0] == 0x8664
+          assert struct.unpack_from("<H", b, o+24+68)[0] == 2
+          print(f"Validated Windows x64 GUI executable ({len(b)} bytes)")
+          PY
+          sha256sum HDRDesk.exe > SHA256SUMS.txt
+      - name: Publish versioned release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "::error::Release $VERSION already exists; choose a new version."
+            exit 1
+          fi
+          cat > release-notes.md <<'NOTES'
+          Portable Windows x64 executable. No separate Python installation required.
+
+          - Desktop brightness, contrast and gamma controls
+          - Windows HDR SDR content brightness
+          - Live NVIDIA RTX Video HDR controls
+          - Compact always-on-top interface with keyboard navigation
+
+          Download HDRDesk.exe and run it from a writable folder. The executable is unsigned. See the README for compatibility and driver limitations. The build is format-validated; physical HDR/display behavior has not been tested on the CI runner.
+          NOTES
+          gh release create "$VERSION" HDRDesk.exe SHA256SUMS.txt \
+            --target "$GITHUB_SHA" \
+            --title "HDRDesk $VERSION" \
+            --notes-file release-notes.md \
+            --latest
+          gh release view "$VERSION" --json tagName,isDraft,isPrerelease,assets,url
