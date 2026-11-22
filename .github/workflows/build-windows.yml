@@ -51,7 +51,7 @@ jobs:
           python -c "import pathlib, struct; p=pathlib.Path('dist/HDRDesk.exe'); b=p.read_bytes(); assert b[:2]==b'MZ'; o=struct.unpack_from('<I',b,60)[0]; assert b[o:o+4]==b'PE\x00\x00'; assert struct.unpack_from('<H',b,o+4)[0]==0x8664; assert struct.unpack_from('<H',b,o+24+68)[0]==2; print(p, len(b), 'bytes; Windows x64 GUI executable')"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-FileHash dist/HDRDesk.exe -Algorithm SHA256
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: HDRDesk-windows-x64
           path: dist/HDRDesk.exe
@@ -65,7 +65,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: HDRDesk-windows-x64
           path: dist
