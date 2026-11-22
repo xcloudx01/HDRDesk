@@ -1,10 +1,6 @@
 name: Publish Windows release
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/release-windows.yml
   workflow_dispatch:
     inputs:
       version:
@@ -26,9 +22,9 @@ jobs:
     timeout-minutes: 10
     env:
       GH_TOKEN: ${{ github.token }}
-      VERSION: ${{ inputs.version || 'v0.1.0' }}
+      VERSION: ${{ inputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Validate packaged executable
         shell: bash
         run: |
