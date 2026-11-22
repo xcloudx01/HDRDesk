@@ -1,0 +1,57 @@
+name: Publish HDRDesk v0.1.3
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/publish-v0.1.3.yml
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET: 77ede92cf58ad7a8e75bc547d91d811696579fa0
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 77ede92cf58ad7a8e75bc547d91d811696579fa0
+          persist-credentials: false
+      - name: Verify production binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET"
+          test "$(git hash-object HDRDesk.exe)" = "851dc2c2afa4383e5fba9f25ef25f03541f28abf"
+          printf '%s  HDRDesk.exe\n' '784005283bd8a9d0c8ab4d498184480d814768e72a41994be7a027c7d2e0dc5e' > SHA256SUMS.txt
+          sha256sum -c SHA256SUMS.txt
+      - name: Publish versioned release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view v0.1.3 >/dev/null 2>&1; then
+            echo "::error::v0.1.3 exists; refusing to replace it."
+            exit 1
+          fi
+          cat > release-notes.md <<'NOTES'
+          HDRDesk v0.1.3 adds Windows Night Light control to the main panel, immediately below SDR content brightness.
+
+          - Night Light warmth strength slider: 0–100% (coolest to warmest).
+          - Independent Night Light enable/disable checkbox; 0% does not automatically turn Night Light off.
+          - Reads the current Windows settings, tracks changes made externally, and preserves scheduled Night Light configuration.
+          - If the native Night Light registry values are missing or unrecognized, the control remains disabled rather than creating speculative settings.
+          - Five mock-registry tests cover parsing, strength, toggle, schedule preservation and failure handling.
+
+          IMPORTANT: Night Light control uses an undocumented Windows CloudStore registry format (Bond CompactBinary). Windows versions may behave differently. The packaging and codec tests passed, but live display tint was not observed or verified on physical Windows/NVIDIA hardware. Please test before relying on it.
+
+          Windows x64 standalone executable; no separate Python installation required. Unsigned; SmartScreen may prompt.
+
+          Validated production build: https://github.com/xcloudx01/HDRDesk/actions/runs/45001996543
+          NOTES
+          gh release create v0.1.3 HDRDesk.exe SHA256SUMS.txt \
+            --target "$TARGET" --title "HDRDesk v0.1.3" \
+            --notes-file release-notes.md --latest
