@@ -1,10 +1,10 @@
 # HDRDesk
 
-**Live display and RTX Video HDR controls for Windows.**
+**Live display, Windows Night Light, and RTX Video HDR controls for Windows.**
 
-Adjust desktop brightness, contrast, gamma, Windows SDR content brightness, Windows Night Light, and NVIDIA RTX Video HDR from one compact, keyboard-friendly window. Keep the controls on top of the content you're watching and tune the image without navigating three separate settings interfaces.
+Adjust desktop brightness, contrast, gamma, Windows SDR content brightness, Windows Night Light, and NVIDIA RTX Video HDR from one compact, keyboard-friendly window. Keep the controls on top of the content you're watching and tune the image without navigating multiple settings interfaces.
 
-![HDRDesk with its RTX Video HDR panel expanded](docs/screenshot.png)
+![HDRDesk showing desktop colour controls, SDR content brightness, Windows Night Light, and RTX Video HDR controls](docs/screenshot.png)
 
 ## Features
 
@@ -50,7 +50,7 @@ For RTX Video HDR, enable Windows HDR on a compatible display, use a supported N
 | RTX contrast | −100% to +100% |
 | RTX saturation | −100% to +100% |
 
-Night Light warmth and enablement are independent: 0% is the coolest setting, **not** necessarily off. The slider below SDR content brightness reads the current user's native Windows Night Light settings and preserves its schedule. It is available with HDR on or off. Changes made in Windows Settings are reflected automatically. If Night Light's storage is unavailable or unrecognized, HDRDesk disables these controls without creating unknown registry records. This is an **undocumented Windows CloudStore interface**; codec tests are automated, but hardware behavior has not yet been confirmed on a live Windows machine.
+Night Light warmth and enablement are independent: 0% is the coolest setting, **not** necessarily off. The slider below SDR content brightness reads the current user's native Windows Night Light settings and preserves its schedule. It is available with HDR on or off. Changes made in Windows Settings are reflected automatically. If Night Light's storage is unavailable or unrecognized, HDRDesk disables these controls without creating unknown registry records. This is an **undocumented Windows CloudStore interface**. The Night Light control has passed automated codec tests and has been reported working on the Windows setup shown in the screenshot; behavior on other Windows versions and display configurations remains unverified.
 
 Desktop brightness and contrast here are software GPU LUT adjustments, not physical monitor brightness or OSD settings. The nit values are requested/reference levels, not measurements of physical panel luminance.
 
@@ -78,7 +78,7 @@ Developed and reported tested on:
 
 Other configurations have not been established by the supplied testing. The UI targets the primary display; independent multi-monitor control has not been implemented. Windows HDR must be enabled separately. RTX Video HDR is NVIDIA's **video** conversion feature, not RTX HDR for games.
 
-The Windows SDR-white setter and NVIDIA driver-private calls are undocumented. Driver or Windows updates may change their behavior. GPU gamma-ramp effects in HDR mode also depend on the display path; this is an interactive adjustment tool, not a colorimeter calibration application.
+The Windows SDR-white setter, Night Light CloudStore storage format, and NVIDIA driver-private calls are undocumented. Driver or Windows updates may change their behavior. GPU gamma-ramp effects in HDR mode also depend on the display path; this is an interactive adjustment tool, not a colorimeter calibration application.
 
 HDRDesk applies its saved desktop colour settings at launch and maintains the gamma ramp while running. This can conflict with other LUT loaders or calibration software. Closing the application does not automatically restore the original display settings.
 
@@ -146,7 +146,7 @@ The per-display scope is the captured scope, not a general multi-monitor targeti
 
 The self-test changes live settings and attempts to restore SDR and RTX values and a neutral gamma ramp; run it only when such changes are acceptable.
 
-The optional Frida tracing tools require a separate Frida installation and elevation; neither is needed to run HDRDesk. The screenshot shows the original window title.
+The optional Frida tracing tools require a separate Frida installation and elevation; neither is needed to run HDRDesk. The screenshot shows the current application window with Night Light controls beneath SDR content brightness.
 
 ## Project status
 
@@ -154,4 +154,4 @@ Experimental Windows utility. When reporting compatibility problems, include you
 
 ### Night Light technical reference
 
-HDRDesk uses the reverse-engineered [Windows Night Light CloudStore format](https://github.com/kvnxiao/win-nightlight-cli/blob/main/docs/nightlight-registry-format.md) (Windows 11, tested by the upstream research on builds 26100/26300). There is no supported public Windows API for controlling this strength slider. Registry binary edits preserve unrelated scheduling fields, but physical color application can differ across Windows builds and display paths.
+HDRDesk uses the reverse-engineered [Windows Night Light CloudStore format](https://github.com/kvnxiao/win-nightlight-cli/blob/main/docs/nightlight-registry-format.md) (Windows 11, tested by the upstream research on builds 26100/26300). There is no supported public Windows API for controlling this strength slider. Registry binary edits preserve unrelated scheduling fields. Native Night Light operation was confirmed in a user test on the depicted setup; other Windows builds and display paths still need validation.
