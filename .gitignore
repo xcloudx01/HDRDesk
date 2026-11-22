@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local state and diagnostic captures
+settings.json
+trace/
+measure/
+apk/
+*.log
+
+# Build outputs and editor/OS metadata
+build/
+dist/
+*.spec
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
