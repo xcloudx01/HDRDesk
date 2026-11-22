@@ -32,7 +32,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.15'
           architecture: x64
@@ -56,6 +56,19 @@ jobs:
           name: HDRDesk-windows-x64
           path: dist/HDRDesk.exe
           if-no-files-found: error
+          archive: true
+          compression-level: 0
+      - uses: actions/download-artifact@v8
+        with:
+          name: HDRDesk-windows-x64
+          path: artifact-check
+      - name: Verify artifact round trip
+        shell: pwsh
+        run: |
+          $original = (Get-FileHash dist/HDRDesk.exe -Algorithm SHA256).Hash
+          $downloaded = (Get-FileHash artifact-check/HDRDesk.exe -Algorithm SHA256).Hash
+          if ($original -ne $downloaded) { throw 'Artifact SHA256 mismatch.' }
+          Write-Host "Verified artifact SHA256: $downloaded"
   publish:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: build
