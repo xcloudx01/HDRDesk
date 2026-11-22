@@ -1,7 +1,7 @@
 """Monitor Sliders: floating always-on-top display control for the primary monitor.
 
 Main panel  : Brightness / Contrast / Gamma (GPU gamma LUT, like NVCP 'Adjust desktop colour settings')
-              + Windows SDR content brightness (HDR mode).
+              + Windows SDR content brightness (HDR mode) + Windows Night Light warmth/on-off.
 Side panel  : RTX Video HDR (NVIDIA App > System > Video > HDR), applied live through the same
               driver escape the NVIDIA App uses (see nvescape.py).
 
@@ -19,6 +19,7 @@ from tkinter import ttk
 import displaycore as dc
 import nvescape
 import nvhdr
+import nightlight
 
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(2)
@@ -202,6 +203,9 @@ class App:
         self.disp = dc.primary_display()
         self.state = load_state()
         self.pending_ramp = self.pending_sdr = self.pending_hdr = False
+        self.pending_night = None
+        self.night_last_apply = 0.0
+        self.night_ctl = nightlight.NightLight()
         self.want_ramp = None
         self.rows, self.hdr_rows = {}, []
         self.held_key, self.repeat_job = None, None
@@ -235,8 +239,29 @@ class App:
             self.rows["sdr"].set_enabled(False)
             self.rows["sdr"].val.configure(text="HDR off")
 
+        # Windows Night Light strength and enablement are separate system settings.
+        self.night_error = ""
+        try:
+            nl = self.night_ctl.read()
+            self.night_available = True
+        except (OSError, ValueError) as exc:
+            nl = {"enabled": False, "strength": 0}
+            self.night_available = False
+            self.night_error = f"Night Light unavailable: {exc}"
+        self.rows["night"] = Row(self, frm, 5, "night", "Night Light", 0, 100,
+                                  lambda v: f"{v} %", nl["strength"], None, self.on_night_change)
+        self.night_on = tk.BooleanVar(value=nl["enabled"])
+        self.rows["night"].name.grid_remove()
+        self.night_toggle = ttk.Checkbutton(frm, text="Night Light", variable=self.night_on,
+                                            command=self.on_night_toggle, takefocus=0)
+        self.night_toggle.grid(row=5, column=0, sticky="w")
+        if not self.night_available:
+            self.rows["night"].set_enabled(False)
+            self.rows["night"].val.configure(text="Unavailable")
+            self.night_toggle.state(["disabled"])
+
         btns = ttk.Frame(frm)
-        btns.grid(row=5, column=0, columnspan=3, pady=(10, 0), sticky="ew")
+        btns.grid(row=6, column=0, columnspan=3, pady=(10, 0), sticky="ew")
         ttk.Button(btns, text="Reset colour", command=self.reset_ramp, takefocus=0).pack(side="left")
         self.hdr_btn = ttk.Button(btns, text="RTX HDR  ▸", command=self.toggle_hdr_panel, takefocus=0)
         self.hdr_btn.pack(side="left", padx=6)
@@ -245,9 +270,9 @@ class App:
                         command=lambda: root.attributes("-topmost", self.pin.get())).pack(side="right")
 
         ttk.Label(frm, text="↑↓ select   ←→ adjust   Shift fine   Ctrl coarse   hold to slide   Del default",
-                  style="Hint.TLabel").grid(row=6, column=0, columnspan=3, sticky="w", pady=(8, 0))
-        self.status = ttk.Label(frm, text="", style="Status.TLabel")
-        self.status.grid(row=7, column=0, columnspan=3, sticky="w")
+                  style="Hint.TLabel").grid(row=7, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        self.status = ttk.Label(frm, text=self.night_error, style="Status.TLabel")
+        self.status.grid(row=8, column=0, columnspan=3, sticky="w")
 
         self._build_hdr_panel(root)
         if self.state.get("hdr_open"):
@@ -335,6 +360,59 @@ class App:
             self.status.configure(text="")
         except OSError as e:
             self.status.configure(text=str(e))
+
+    # ---- Windows Night Light: native warmth and independent enable switch ----
+    def on_night_change(self):
+        if not self.night_available:
+            return
+        if self.pending_night is not None:
+            self.root.after_cancel(self.pending_night)
+        self.pending_night = self.root.after(150, self.apply_night)
+
+    def apply_night(self):
+        self.pending_night = None
+        if not self.night_available:
+            return
+        try:
+            self.night_ctl.set_strength(self.rows["night"].value)
+            self.night_last_apply = time.monotonic()
+            self.status.configure(text="")
+        except (OSError, ValueError) as exc:
+            self.status.configure(text=f"Night Light: {exc}")
+
+    def on_night_toggle(self):
+        if not self.night_available:
+            return
+        if self.pending_night is not None:
+            self.root.after_cancel(self.pending_night)
+            self.apply_night()
+        try:
+            self.night_ctl.set_enabled(self.night_on.get())
+            self.night_last_apply = time.monotonic()
+            self.status.configure(text="")
+        except (OSError, ValueError) as exc:
+            try:
+                self.night_on.set(self.night_ctl.read()["enabled"])
+            except OSError:
+                pass
+            self.status.configure(text=f"Night Light: {exc}")
+
+    def sync_night_from_windows(self):
+        if not self.night_available:
+            return
+        row = self.rows["night"]
+        if (self.pending_night is not None or self.repeat_job
+                or time.monotonic() - self.night_last_apply < 1.0
+                or row.scale.instate(["pressed"])):
+            return
+        try:
+            current = self.night_ctl.read()
+            if current["enabled"] != self.night_on.get():
+                self.night_on.set(current["enabled"])
+            if current["strength"] != row.value:
+                row.set(current["strength"], notify=False)
+        except (OSError, ValueError) as exc:
+            self.status.configure(text=f"Night Light: {exc}")
 
     # ---- RTX Video HDR side panel (NVIDIA App > System > Video > HDR) ----
     def _build_hdr_panel(self, root):
@@ -434,6 +512,7 @@ class App:
                 if v != sdr.value:
                     sdr.set(v, notify=False)
             self.sync_hdr_from_driver()
+            self.sync_night_from_windows()
         except (OSError, RuntimeError):
             try:  # display topology changed: re-find the primary
                 self.disp = dc.primary_display()
@@ -442,6 +521,9 @@ class App:
         self.root.after(2000, self.watchdog)
 
     def on_close(self):
+        if self.pending_night is not None:
+            self.root.after_cancel(self.pending_night)
+            self.apply_night()
         data = {k: self.rows[k].value for k in ("brightness", "contrast", "gamma")}
         data.update(x=self.root.winfo_x(), y=self.root.winfo_y(), hdr_open=self.hdr_open)
         with open(STATE, "w") as f:
