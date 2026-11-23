@@ -403,6 +403,14 @@ class App:
             row.val.configure(text=row.fmt(row.value))
 
     def reset_ramp(self):
+        if self.ramp_unknown:
+            # Reset is an explicit user request even if placeholder sliders are
+            # already at neutral positions. Apply neutral to the custom LUT.
+            for key in ("brightness", "contrast", "gamma"):
+                row = self.rows[key]
+                row.set(row.default, notify=False)
+            self.on_ramp_change()
+            return
         for k in ("brightness", "contrast", "gamma"):
             self.rows[k].reset()
 
