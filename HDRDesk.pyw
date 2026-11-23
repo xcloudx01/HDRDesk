@@ -20,6 +20,7 @@ import displaycore as dc
 import nvescape
 import nvhdr
 import nightlight
+import rampfit
 
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(2)
@@ -202,11 +203,25 @@ class App:
         self.root = root
         self.disp = dc.primary_display()
         self.state = load_state()
+        # Read the live GPU LUT. Saved slider values are merely an exact-match
+        # hint for ambiguous/clipped ramps, never instructions to overwrite it.
+        self.ramp_last_apply = 0.0
+        try:
+            current_ramp = self.disp.get_ramp()
+            self.ramp_signature = rampfit.signature(current_ramp)
+            live_ramp = rampfit.infer_controls(
+                current_ramp, tuple(self.state[k] for k in ("brightness", "contrast", "gamma")))
+            self.ramp_warning = ("" if live_ramp is not None else
+                                 "Custom GPU LUT: unchanged; adjusting a colour slider replaces it.")
+        except OSError as exc:
+            self.ramp_signature, live_ramp = None, None
+            self.ramp_warning = f"GPU LUT unreadable: {exc}; startup did not change it."
+        self.ramp_unknown = live_ramp is None
+        self.ramp_values = live_ramp if live_ramp is not None else (0, 0, 100)
         self.pending_ramp = self.pending_sdr = self.pending_hdr = False
         self.pending_night = None
         self.night_last_apply = 0.0
         self.night_ctl = nightlight.NightLight()
-        self.want_ramp = None
         self.rows, self.hdr_rows = {}, []
         self.held_key, self.repeat_job = None, None
         self.hdr_open, self.hdr_last_apply = False, 0.0
@@ -229,7 +244,11 @@ class App:
                  ("contrast", "Contrast", -100, 100, fmt_signed, 0),
                  ("gamma", "Gamma", 30, 280, lambda v: f"{v / 100:.2f}", 100)]
         for r, (key, text, lo, hi, fmt, dflt) in enumerate(specs, start=1):
-            self.rows[key] = Row(self, frm, r, key, text, lo, hi, fmt, self.state[key], dflt, self.on_ramp_change)
+            self.rows[key] = Row(self, frm, r, key, text, lo, hi, fmt,
+                                 self.ramp_values[r - 1], dflt, self.on_ramp_change)
+        if self.ramp_unknown:
+            for key in ("brightness", "contrast", "gamma"):
+                self.rows[key].val.configure(text="Unknown")
 
         ac = self.disp.advanced_color()
         sdr_now = round((self.disp.sdr_white_nits() - 80) / 4)
@@ -273,6 +292,8 @@ class App:
                   style="Hint.TLabel").grid(row=7, column=0, columnspan=3, sticky="w", pady=(8, 0))
         self.status = ttk.Label(frm, text=self.night_error, style="Status.TLabel")
         self.status.grid(row=8, column=0, columnspan=3, sticky="w")
+        self.ramp_notice = ttk.Label(frm, text=self.ramp_warning, style="Status.TLabel")
+        self.ramp_notice.grid(row=9, column=0, columnspan=3, sticky="w")
 
         self._build_hdr_panel(root)
         if self.state.get("hdr_open"):
@@ -283,7 +304,7 @@ class App:
         self.side_rows = {r.key: r for r in self.hdr_rows}
         self.sliders.update({r.key: r.scale for r in self.hdr_rows})
 
-        self.apply_ramp()
+        # Merely opening HDRDesk must not change the system's display LUT.
         dark_titlebar(root)
         self.rows["brightness"].scale.focus_set()
         root.after(2000, self.watchdog)
@@ -329,6 +350,13 @@ class App:
 
     # ---- gamma LUT (brightness / contrast / gamma) ----
     def on_ramp_change(self):
+        # Replacing an unrepresentable LUT requires an explicit slider change.
+        if self.ramp_unknown:
+            self.ramp_unknown = False
+            self.ramp_notice.configure(text="")
+            for key in ("brightness", "contrast", "gamma"):
+                row = self.rows[key]
+                row.val.configure(text=row.fmt(row.value))
         if not self.pending_ramp:  # coalesce rapid drags to ~60 Hz
             self.pending_ramp = True
             self.root.after(16, self.apply_ramp)
@@ -336,14 +364,53 @@ class App:
     def apply_ramp(self):
         self.pending_ramp = False
         b, c, g = (self.rows[k].value for k in ("brightness", "contrast", "gamma"))
-        self.want_ramp = dc.build_ramp(b / 100, c / 100, g / 100)
+        desired = dc.build_ramp(b / 100, c / 100, g / 100)
         try:
-            self.disp.set_ramp(self.want_ramp)
+            self.disp.set_ramp(desired)
+            self.ramp_last_apply = time.monotonic()
+            self.ramp_signature = rampfit.signature(desired)
             self.status.configure(text="")
         except OSError as e:
             self.status.configure(text=str(e))
 
+    def sync_ramp_from_windows(self):
+        # Read external changes, including colour-control changes and resets on
+        # mode switches. Never force an old LUT back into Windows.
+        if (self.pending_ramp or self.repeat_job or
+                time.monotonic() - self.ramp_last_apply < 1.5 or
+                any(self.rows[k].scale.instate(["pressed"])
+                    for k in ("brightness", "contrast", "gamma"))):
+            return
+        current = self.disp.get_ramp()
+        signature = rampfit.signature(current)
+        if signature == self.ramp_signature:
+            return
+        self.ramp_signature = signature
+        preferred = tuple(self.rows[k].value for k in ("brightness", "contrast", "gamma"))
+        live = rampfit.infer_controls(current, preferred)
+        if live is None:
+            self.ramp_unknown = True
+            self.ramp_notice.configure(
+                text="Custom GPU LUT: unchanged; adjusting a colour slider replaces it.")
+            for key in ("brightness", "contrast", "gamma"):
+                self.rows[key].val.configure(text="Unknown")
+            return
+        self.ramp_unknown = False
+        self.ramp_notice.configure(text="")
+        for key, value in zip(("brightness", "contrast", "gamma"), live):
+            row = self.rows[key]
+            row.set(value, notify=False)
+            row.val.configure(text=row.fmt(row.value))
+
     def reset_ramp(self):
+        if self.ramp_unknown:
+            # Reset is an explicit user request even if placeholder sliders are
+            # already at neutral positions. Apply neutral to the custom LUT.
+            for key in ("brightness", "contrast", "gamma"):
+                row = self.rows[key]
+                row.set(row.default, notify=False)
+            self.on_ramp_change()
+            return
         for k in ("brightness", "contrast", "gamma"):
             self.rows[k].reset()
 
@@ -499,11 +566,8 @@ class App:
     # ---- keep state in sync with the system ----
     def watchdog(self):
         try:
-            # Windows drops the LUT on sleep / mode change / HDR toggle: put ours back.
-            if self.want_ramp is not None:
-                cur = self.disp.get_ramp()
-                if any(cur[0][i] != self.want_ramp[0][i] for i in (0, 64, 128, 192, 255)):
-                    self.disp.set_ramp(self.want_ramp)
+            # The OS/external display controls are authoritative, not saved state.
+            self.sync_ramp_from_windows()
             # Follow external changes to SDR brightness (e.g. the Settings app).
             sdr = self.rows["sdr"]
             if (not self.pending_sdr and not self.repeat_job and not sdr.scale.instate(["pressed"])

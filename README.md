@@ -14,7 +14,7 @@ Adjust desktop brightness, contrast, gamma, Windows SDR content brightness, Wind
 - **RTX Video HDR:** enable or disable SDR-to-HDR video conversion and adjust peak brightness, middle grey, contrast and saturation live.
 - **Always-on-top window:** tune against the content itself; collapse the RTX panel when not needed.
 - **Keyboard control:** select and adjust sliders without repeatedly reaching for the mouse.
-- **State synchronization:** follow external changes to SDR white level, Windows Night Light and RTX Video HDR settings; reapply the configured GPU gamma ramp when it is lost.
+- **State synchronization:** read the active GPU gamma ramp at startup and follow external LUT changes without overwriting them; also follow external changes to SDR white level, Windows Night Light and RTX Video HDR settings.
 - **Lightweight:** Python standard library only for the main application; no administrator elevation needed for the live RTX Video HDR control path on the tested configuration.
 
 ## Quick start
@@ -80,7 +80,7 @@ Other configurations have not been established by the supplied testing. The UI t
 
 The Windows SDR-white setter, Night Light CloudStore storage format, and NVIDIA driver-private calls are undocumented. Driver or Windows updates may change their behavior. GPU gamma-ramp effects in HDR mode also depend on the display path; this is an interactive adjustment tool, not a colorimeter calibration application.
 
-HDRDesk applies its saved desktop colour settings at launch and maintains the gamma ramp while running. This can conflict with other LUT loaders or calibration software. Closing the application does not automatically restore the original display settings.
+HDRDesk reads the currently active GPU gamma ramp at launch instead of applying saved slider settings. When the ramp can be represented by HDRDesk's brightness, contrast and gamma model, the sliders display the inferred values. External LUT changes are followed rather than overwritten. If a custom LUT (such as an ICC calibration or per-channel colour curve) cannot be represented, the three values show **Unknown** and the LUT is preserved until a colour slider is adjusted. That adjustment replaces the custom LUT with HDRDesk's three-control curve. `settings.json` retains window position and an exact-match hint for ambiguous ramps; it is not an authority for the active LUT. Closing HDRDesk does not automatically restore the original display settings.
 
 If you need to restore a neutral desktop gamma ramp, close HDRDesk and run:
 
@@ -136,10 +136,12 @@ The per-display scope is the captured scope, not a general multi-monitor targeti
 | --- | --- |
 | `HDRDesk.pyw` | Tkinter application |
 | `displaycore.py` | Windows DisplayConfig and GPU gamma ramp |
+| `rampfit.py` | Read-only inference of desktop brightness, contrast and gamma from the live LUT |
 | `nvescape.py` | Live RTX Video HDR driver requests |
 | `nvhdr.py` | NVIDIA settings discovery, registry read and persistence-only helper |
 | `nightlight.py` | Native Windows Night Light strength and on/off bridge |
 | `tests/test_nightlight.py` | Mock-registry codec tests without touching real Night Light settings |
+| `tests/test_rampfit.py` | Cross-platform LUT inference and custom-curve regression tests |
 | `reset.py` | Emergency neutral gamma-ramp reset |
 | `selftest.py` | Interactive Windows system-state checks |
 | `tools/` | Driver tracing, registry diagnostics and display-control probes |
