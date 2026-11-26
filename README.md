@@ -1,6 +1,6 @@
 # HDRDesk
 
-**Live display, Windows Night Light, and RTX Video HDR controls for Windows.**
+**A Windows desktop application for live display, Windows Night Light, and RTX Video HDR controls.**
 
 Adjust desktop brightness, contrast, gamma, Windows SDR content brightness, Windows Night Light, an HDR highlight cap, and NVIDIA RTX Video HDR from one compact, keyboard-friendly window, with presets and global hotkeys. Keep the controls on top of the content you're watching and tune the image without navigating multiple settings interfaces.
 
