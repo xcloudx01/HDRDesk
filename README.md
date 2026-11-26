@@ -4,18 +4,32 @@
 
 Adjust desktop brightness, contrast, gamma, Windows SDR content brightness, Windows Night Light, and NVIDIA RTX Video HDR from one compact, keyboard-friendly window. Keep the controls on top of the content you're watching and tune the image without navigating multiple settings interfaces.
 
+**No more night-time flashbangs.** The **Highlight cap** puts a soft ceiling on how bright HDR mode is allowed to get, so a white web page opening in a dark room no longer slams your eyes, while everything below the cap looks exactly as before.
+
 ![HDRDesk showing desktop colour controls, SDR content brightness, Windows Night Light, and RTX Video HDR controls](docs/screenshot.png)
 
 ## Features
 
 - **Desktop colour:** GPU gamma-ramp brightness, contrast and gamma, with a one-click neutral reset.
 - **Windows HDR:** adjust SDR content brightness from 0–100, with the corresponding nominal SDR white level shown in nits (80–480).
+- **Highlight cap (HDR):** a soft ceiling on brightness in real nits, applied to the desktop and RTX Video HDR alike. Below the knee nothing changes; above it highlights roll off smoothly towards the cap. See [Why a highlight cap?](#why-a-highlight-cap)
 - **Windows Night Light:** adjust native warmth (0–100%) and switch Night Light on or off independently, preserving Windows scheduling.
 - **RTX Video HDR:** enable or disable SDR-to-HDR video conversion and adjust peak brightness, middle grey, contrast and saturation live.
 - **Always-on-top window:** tune against the content itself; collapse the RTX panel when not needed.
 - **Keyboard control:** select and adjust sliders without repeatedly reaching for the mouse.
 - **State synchronization:** read the active GPU gamma ramp at startup and follow external LUT changes without overwriting them; also follow external changes to SDR white level, Windows Night Light and RTX Video HDR settings.
 - **Lightweight:** Python standard library only for the main application; no administrator elevation needed for the live RTX Video HDR control path on the tested configuration.
+
+## Why a highlight cap?
+
+HDR on an OLED, especially a QD-OLED, looks fantastic in games. Using the desktop with it at night is a different story:
+
+- **Flashbangs.** Go from a dark game or video to a white web page or File Explorer window and the screen jumps from pure black to blinding white in one frame. In a dark room that hurts.
+- **Eyestrain.** In HDR, bright white pixels are physically far brighter than everything around them. That punch is what makes HDR games look great, but text on a white page, toolbars and dialogs are not meant to be highlights, and staring at them for hours is tiring.
+- **Brightness that depends on what's on screen.** OLEDs limit how bright a mostly-white screen can be (on the tested AW3423DWF a small white patch reached about 410 nits, a full white screen only about 110), so the same white changes brightness as windows open and close.
+- **Mid-whites that look off.** Watching SDR content in HDR, even through RTX Video HDR, the top of the brightness range can be stretched so that bright-but-ordinary things (white shirts, skies, UI) look either blown out or oddly flat, as if the curve were wrong.
+
+The highlight cap fixes this at the last step before the monitor. Pick a cap in nits (say 150) and a knee where the roll-off begins: everything darker than the knee is untouched, so shadows, mid-tones and colours look exactly as before, and everything brighter eases smoothly up to the cap instead of shooting past it. Because it limits the actual signal sent to the monitor, it works the same for the desktop, browsers and RTX Video HDR, and a low enough cap also keeps the monitor's own dimming from kicking in, so white stays one steady brightness. Move the sliders against your own content to fine-tune where highlights stop, then untick it when it's time to game.
 
 ## Quick start
 
@@ -44,6 +58,8 @@ For RTX Video HDR, enable Windows HDR on a compatible display, use a supported N
 | Desktop gamma | 0.30–2.80 |
 | SDR content brightness | 0–100 (nominal 80–480 nits) |
 | Windows Night Light | On/off checkbox and warmth 0–100% |
+| Highlight cap (HDR only) | On/off checkbox and cap 80–1000 nits (default 150) |
+| Cap knee | 50–100% of the cap (default 70%); shown with the resulting nits |
 | RTX Video HDR | On / off |
 | RTX peak brightness | 400–1000 nits |
 | RTX middle grey | 10–100 nits |
@@ -53,6 +69,8 @@ For RTX Video HDR, enable Windows HDR on a compatible display, use a supported N
 Night Light warmth and enablement are independent: 0% is the coolest setting, **not** necessarily off. The slider below SDR content brightness reads the current user's native Windows Night Light settings and preserves its schedule. It is available with HDR on or off. Changes made in Windows Settings are reflected automatically. If Night Light's storage is unavailable or unrecognized, HDRDesk disables these controls without creating unknown registry records. This is an **undocumented Windows CloudStore interface**. The Night Light control has passed automated codec tests and has been reported working on the Windows setup shown in the screenshot; behavior on other Windows versions and display configurations remains unverified.
 
 Desktop brightness and contrast here are software GPU LUT adjustments, not physical monitor brightness or OSD settings. The nit values are requested/reference levels, not measurements of physical panel luminance.
+
+**Highlight cap.** With Windows HDR on, the GPU gamma ramp acts on the PQ signal sent to the monitor, so each ramp entry corresponds to an absolute luminance. HDRDesk folds a roll-off into that ramp: luminance below the knee passes unchanged, and above it approaches (never exceeds) the cap with no visible kink. Because it sits at the end of the display path, it limits SDR desktop content and RTX Video HDR output at the same luminance. On the AW3423DWF a full-screen white field sustains only about 110 nits while small highlights reach about 400+, so a cap near that level keeps the monitor's automatic brightness limiting from kicking in and makes brightness stop depending on how much of the screen is lit. Moving the cap or knee slider switches the cap on (likewise, moving the Night Light slider switches Night Light on); **Reset cap** restores 150 nits / 70 % without changing the on/off state. The cap is applied together with brightness, contrast and gamma, is unavailable with HDR off, and like the other colour controls is not re-applied if Windows drops the LUT (sleep, mode change, HDR toggle): the checkbox then shows it as off. Values are relative to the PQ signal, not measured panel output.
 
 **Reset colour** restores neutral brightness, contrast and gamma. **Reset RTX HDR** restores the application's 400 / 50 / 0 / 0 baseline without changing the RTX Video HDR enable state.
 
@@ -95,6 +113,7 @@ This resets the primary display's GPU gamma ramp only; it does not restore SDR b
 | Control | Mechanism |
 | --- | --- |
 | Desktop brightness / contrast / gamma | GDI `SetDeviceGammaRamp` |
+| Highlight cap | Same GPU ramp, built in SMPTE ST 2084 (PQ) luminance space |
 | Windows SDR content brightness | Undocumented `DisplayConfigSetDeviceInfo` request, type `0xFFFFFFEE` |
 | Windows Night Light | HKCU CloudStore Bond CompactBinary settings/state (undocumented) |
 | RTX Video HDR | Driver-private `D3DKMTEscape` requests, reconstructed from NVIDIA App traffic |
@@ -137,11 +156,13 @@ The per-display scope is the captured scope, not a general multi-monitor targeti
 | `HDRDesk.pyw` | Tkinter application |
 | `displaycore.py` | Windows DisplayConfig and GPU gamma ramp |
 | `rampfit.py` | Read-only inference of desktop brightness, contrast and gamma from the live LUT |
+| `hdrcap.py` | PQ conversion and the highlight-cap roll-off curve |
 | `nvescape.py` | Live RTX Video HDR driver requests |
 | `nvhdr.py` | NVIDIA settings discovery, registry read and persistence-only helper |
 | `nightlight.py` | Native Windows Night Light strength and on/off bridge |
 | `tests/test_nightlight.py` | Mock-registry codec tests without touching real Night Light settings |
 | `tests/test_rampfit.py` | Cross-platform LUT inference and custom-curve regression tests |
+| `tests/test_hdrcap.py` | PQ round trip, roll-off shape and capped-ramp tests |
 | `reset.py` | Emergency neutral gamma-ramp reset |
 | `selftest.py` | Interactive Windows system-state checks |
 | `tools/` | Driver tracing, registry diagnostics and display-control probes |

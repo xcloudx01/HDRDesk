@@ -8,6 +8,8 @@ on:
       - HDRDesk.pyw
       - rampfit.py
       - tests/test_rampfit.py
+      - hdrcap.py
+      - tests/test_hdrcap.py
       - displaycore.py
       - nvescape.py
       - nvhdr.py
@@ -22,6 +24,8 @@ on:
       - HDRDesk.pyw
       - rampfit.py
       - tests/test_rampfit.py
+      - hdrcap.py
+      - tests/test_hdrcap.py
       - displaycore.py
       - nvescape.py
       - nvhdr.py
@@ -56,7 +60,7 @@ jobs:
         run: |
           python -m pip install "pyinstaller==6.22.3"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -m py_compile HDRDesk.pyw displaycore.py nvescape.py nvhdr.py nightlight.py rampfit.py tests/test_nightlight.py tests/test_rampfit.py
+          python -m py_compile HDRDesk.pyw displaycore.py nvescape.py nvhdr.py nightlight.py rampfit.py hdrcap.py tests/test_nightlight.py tests/test_rampfit.py tests/test_hdrcap.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m unittest discover -s tests -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

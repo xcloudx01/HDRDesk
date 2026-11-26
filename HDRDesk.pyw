@@ -1,7 +1,8 @@
 """Monitor Sliders: floating always-on-top display control for the primary monitor.
 
 Main panel  : Brightness / Contrast / Gamma (GPU gamma LUT, like NVCP 'Adjust desktop colour settings')
-              + Windows SDR content brightness (HDR mode) + Windows Night Light warmth/on-off.
+              + Windows SDR content brightness (HDR mode) + Windows Night Light warmth/on-off
+              + highlight cap (HDR mode): soft nits ceiling folded into the same GPU LUT (see hdrcap.py).
 Side panel  : RTX Video HDR (NVIDIA App > System > Video > HDR), applied live through the same
               driver escape the NVIDIA App uses (see nvescape.py).
 
@@ -17,6 +18,7 @@ import tkinter as tk
 from tkinter import ttk
 
 import displaycore as dc
+import hdrcap
 import nvescape
 import nvhdr
 import nightlight
@@ -30,7 +32,9 @@ except Exception:
 HERE = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
 STATE = os.path.join(HERE, "settings.json")
 ICON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "HDRDesk.ico")
-DEFAULTS = {"brightness": 0, "contrast": 0, "gamma": 100, "x": None, "y": None, "hdr_open": False}
+DEFAULTS = {"brightness": 0, "contrast": 0, "gamma": 100, "x": None, "y": None, "hdr_open": False,
+            "cap_on": False, "cap_nits": hdrcap.CAP_DEFAULT, "cap_knee": hdrcap.KNEE_DEFAULT}
+RAMP_KEYS = ("brightness", "contrast", "gamma")
 
 HDR_KEYS = ("peak", "midgrey", "contrast", "saturation")
 HDR_RESET = {"peak": 400, "midgrey": 50, "contrast": 0, "saturation": 0}  # 400-nit True Black baseline
@@ -206,11 +210,13 @@ class App:
         # Read the live GPU LUT. Saved slider values are merely an exact-match
         # hint for ambiguous/clipped ramps, never instructions to overwrite it.
         self.ramp_last_apply = 0.0
+        live_cap = False
         try:
             current_ramp = self.disp.get_ramp()
             self.ramp_signature = rampfit.signature(current_ramp)
-            live_ramp = rampfit.infer_controls(
-                current_ramp, tuple(self.state[k] for k in ("brightness", "contrast", "gamma")))
+            live = self.match_live_ramp(current_ramp, tuple(self.state[k] for k in RAMP_KEYS),
+                                        self.state["cap_nits"], self.state["cap_knee"])
+            live_ramp, live_cap = live if live is not None else (None, False)
             self.ramp_warning = ("" if live_ramp is not None else
                                  "Custom GPU LUT: unchanged; adjusting a colour slider replaces it.")
         except OSError as exc:
@@ -252,7 +258,7 @@ class App:
 
         ac = self.disp.advanced_color()
         sdr_now = round((self.disp.sdr_white_nits() - 80) / 4)
-        self.rows["sdr"] = Row(self, frm, 4, "sdr", "SDR content", 0, 100,
+        self.rows["sdr"] = Row(self, frm, 6, "sdr", "SDR content", 0, 100,
                                lambda v: f"{v} · {80 + 4 * v} nits", sdr_now, None, self.on_sdr_change)
         if not ac["enabled"]:
             self.rows["sdr"].set_enabled(False)
@@ -267,21 +273,42 @@ class App:
             nl = {"enabled": False, "strength": 0}
             self.night_available = False
             self.night_error = f"Night Light unavailable: {exc}"
-        self.rows["night"] = Row(self, frm, 5, "night", "Night Light", 0, 100,
+        self.rows["night"] = Row(self, frm, 4, "night", "Night Light", 0, 100,
                                   lambda v: f"{v} %", nl["strength"], None, self.on_night_change)
         self.night_on = tk.BooleanVar(value=nl["enabled"])
         self.rows["night"].name.grid_remove()
         self.night_toggle = ttk.Checkbutton(frm, text="Night Light", variable=self.night_on,
                                             command=self.on_night_toggle, takefocus=0)
-        self.night_toggle.grid(row=5, column=0, sticky="w")
+        self.night_toggle.grid(row=4, column=0, sticky="w")
         if not self.night_available:
             self.rows["night"].set_enabled(False)
             self.rows["night"].val.configure(text="Unavailable")
             self.night_toggle.state(["disabled"])
 
+        # Highlight cap (HDR only): soft nits ceiling in the GPU LUT, on the PQ signal itself.
+        self.rows["cap"] = Row(self, frm, 7, "cap", "Highlight cap", *hdrcap.CAP_RANGE,
+                               lambda v: f"{v} nits", self.state["cap_nits"], hdrcap.CAP_DEFAULT,
+                               self.on_cap_change)
+        self.rows["knee"] = Row(self, frm, 8, "knee", "Cap knee", *hdrcap.KNEE_RANGE,
+                                lambda v: f"{v}%·{self.rows['cap'].value * v // 100} nits",
+                                self.state["cap_knee"], hdrcap.KNEE_DEFAULT, self.on_cap_change)
+        self.cap_on = tk.BooleanVar(value=live_cap)
+        self.rows["cap"].name.grid_remove()
+        self.cap_toggle = ttk.Checkbutton(frm, text="Highlight cap", variable=self.cap_on,
+                                          command=self.on_cap_toggle, takefocus=0)
+        self.cap_toggle.grid(row=7, column=0, sticky="w")
+        self.cap_available = None
+        self.update_cap_available(ac["enabled"])
+        frm.grid_rowconfigure(5, minsize=10)  # gap: desktop colour / Night Light above, HDR controls below
+        # Up/Down follows the visual order.
+        self.rows = {k: self.rows[k] for k in ("brightness", "contrast", "gamma", "night", "sdr", "cap", "knee")}
+
         btns = ttk.Frame(frm)
-        btns.grid(row=6, column=0, columnspan=3, pady=(10, 0), sticky="ew")
+        btns.grid(row=9, column=0, columnspan=3, pady=(10, 0), sticky="ew")
         ttk.Button(btns, text="Reset colour", command=self.reset_ramp, takefocus=0).pack(side="left")
+        self.cap_reset_btn = ttk.Button(btns, text="Reset cap", command=self.reset_cap, takefocus=0)
+        self.cap_reset_btn.pack(side="left", padx=(6, 0))
+        self.cap_reset_btn.state(["!disabled"] if self.cap_available else ["disabled"])
         self.hdr_btn = ttk.Button(btns, text="RTX HDR  ▸", command=self.toggle_hdr_panel, takefocus=0)
         self.hdr_btn.pack(side="left", padx=6)
         self.pin = tk.BooleanVar(value=True)
@@ -289,11 +316,11 @@ class App:
                         command=lambda: root.attributes("-topmost", self.pin.get())).pack(side="right")
 
         ttk.Label(frm, text="↑↓ select   ←→ adjust   Shift fine   Ctrl coarse   hold to slide   Del default",
-                  style="Hint.TLabel").grid(row=7, column=0, columnspan=3, sticky="w", pady=(8, 0))
+                  style="Hint.TLabel").grid(row=10, column=0, columnspan=3, sticky="w", pady=(8, 0))
         self.status = ttk.Label(frm, text=self.night_error, style="Status.TLabel")
-        self.status.grid(row=8, column=0, columnspan=3, sticky="w")
+        self.status.grid(row=11, column=0, columnspan=3, sticky="w")
         self.ramp_notice = ttk.Label(frm, text=self.ramp_warning, style="Status.TLabel")
-        self.ramp_notice.grid(row=9, column=0, columnspan=3, sticky="w")
+        self.ramp_notice.grid(row=12, column=0, columnspan=3, sticky="w")
 
         self._build_hdr_panel(root)
         if self.state.get("hdr_open"):
@@ -361,10 +388,74 @@ class App:
             self.pending_ramp = True
             self.root.after(16, self.apply_ramp)
 
+    @staticmethod
+    def model_ramp(bcg, cap=None):
+        """The LUT HDRDesk writes: brightness/contrast/gamma, then (HDR only) the nits roll-off.
+        cap is (cap_nits, knee_pct) or None."""
+        b, c, g = bcg
+        ramp = dc.build_ramp(b / 100, c / 100, g / 100)
+        return hdrcap.apply_to_ramp(ramp, *cap) if cap else ramp
+
+    @classmethod
+    def match_live_ramp(cls, current, preferred, cap_nits, cap_knee):
+        """Read the live LUT as ((b, c, g), cap_on), or None if HDRDesk's model can't reproduce it.
+        A capped LUT is only recognised for the saved controls and cap settings (near-exact match)."""
+        try:
+            want = rampfit.signature(cls.model_ramp(preferred, (cap_nits, cap_knee)))
+            have = rampfit.signature(current)
+            if all(abs(a - b) <= 2 for wc, hc in zip(want, have) for a, b in zip(wc, hc)):
+                return tuple(preferred), True
+        except (TypeError, ValueError, IndexError):
+            pass
+        live = rampfit.infer_controls(current, preferred)
+        return (live, False) if live is not None else None
+
+    def cap_setting(self):
+        if self.cap_on.get() and self.cap_available:
+            return self.rows["cap"].value, self.rows["knee"].value
+        return None
+
+    def update_cap_available(self, hdr_enabled):
+        if hdr_enabled == self.cap_available:
+            return
+        self.cap_available = hdr_enabled
+        for key in ("cap", "knee"):
+            row = self.rows[key]
+            row.set_enabled(hdr_enabled)
+            row.val.configure(text=row.fmt(row.value) if hdr_enabled else "HDR off")
+        self.cap_toggle.state(["!disabled"] if hdr_enabled else ["disabled"])
+        if hasattr(self, "cap_reset_btn"):
+            self.cap_reset_btn.state(["!disabled"] if hdr_enabled else ["disabled"])
+
+    def on_cap_change(self):
+        """Cap / knee slider moved by the user: switch the cap on if it was off, then apply."""
+        if self.cap_available and not self.cap_on.get():
+            self.cap_on.set(True)
+        self._cap_values_changed()
+
+    def _cap_values_changed(self):
+        """Rewrite the LUT only while the cap is in use, so a reset with the cap off never
+        replaces a custom LUT."""
+        knee = self.rows["knee"]
+        if self.cap_available:
+            knee.val.configure(text=knee.fmt(knee.value))  # its nits readout follows the cap
+        if self.cap_on.get() and self.cap_available:
+            self.on_ramp_change()
+
+    def on_cap_toggle(self):
+        self.on_ramp_change()
+
+    def reset_cap(self):
+        """Cap and knee back to their defaults; the on/off state is left as it is."""
+        if not self.cap_available:
+            return
+        self.rows["cap"].set(hdrcap.CAP_DEFAULT, notify=False)
+        self.rows["knee"].set(hdrcap.KNEE_DEFAULT, notify=False)
+        self._cap_values_changed()
+
     def apply_ramp(self):
         self.pending_ramp = False
-        b, c, g = (self.rows[k].value for k in ("brightness", "contrast", "gamma"))
-        desired = dc.build_ramp(b / 100, c / 100, g / 100)
+        desired = self.model_ramp(tuple(self.rows[k].value for k in RAMP_KEYS), self.cap_setting())
         try:
             self.disp.set_ramp(desired)
             self.ramp_last_apply = time.monotonic()
@@ -379,15 +470,19 @@ class App:
         if (self.pending_ramp or self.repeat_job or
                 time.monotonic() - self.ramp_last_apply < 1.5 or
                 any(self.rows[k].scale.instate(["pressed"])
-                    for k in ("brightness", "contrast", "gamma"))):
+                    for k in RAMP_KEYS + ("cap", "knee"))):
             return
         current = self.disp.get_ramp()
         signature = rampfit.signature(current)
         if signature == self.ramp_signature:
             return
         self.ramp_signature = signature
-        preferred = tuple(self.rows[k].value for k in ("brightness", "contrast", "gamma"))
-        live = rampfit.infer_controls(current, preferred)
+        preferred = tuple(self.rows[k].value for k in RAMP_KEYS)
+        match = self.match_live_ramp(current, preferred, self.rows["cap"].value, self.rows["knee"].value)
+        live = None
+        if match is not None:
+            live, cap_live = match
+            self.cap_on.set(cap_live)  # e.g. Windows dropped the LUT on sleep / HDR toggle
         if live is None:
             self.ramp_unknown = True
             self.ramp_notice.configure(
@@ -431,6 +526,11 @@ class App:
     # ---- Windows Night Light: native warmth and independent enable switch ----
     def on_night_change(self):
         if not self.night_available:
+            return
+        if not self.night_on.get():  # moving the warmth slider switches Night Light on
+            self.night_on.set(True)
+            self.apply_night()       # new strength first, then enable
+            self.on_night_toggle()
             return
         if self.pending_night is not None:
             self.root.after_cancel(self.pending_night)
@@ -569,6 +669,7 @@ class App:
             # The OS/external display controls are authoritative, not saved state.
             self.sync_ramp_from_windows()
             # Follow external changes to SDR brightness (e.g. the Settings app).
+            self.update_cap_available(self.disp.advanced_color()["enabled"])
             sdr = self.rows["sdr"]
             if (not self.pending_sdr and not self.repeat_job and not sdr.scale.instate(["pressed"])
                     and self.disp.advanced_color()["enabled"]):
@@ -589,7 +690,8 @@ class App:
             self.root.after_cancel(self.pending_night)
             self.apply_night()
         data = {k: self.rows[k].value for k in ("brightness", "contrast", "gamma")}
-        data.update(x=self.root.winfo_x(), y=self.root.winfo_y(), hdr_open=self.hdr_open)
+        data.update(x=self.root.winfo_x(), y=self.root.winfo_y(), hdr_open=self.hdr_open,
+                    cap_on=self.cap_on.get(), cap_nits=self.rows["cap"].value, cap_knee=self.rows["knee"].value)
         with open(STATE, "w") as f:
             json.dump(data, f)
         self.root.destroy()
