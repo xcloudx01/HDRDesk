@@ -31,7 +31,7 @@ HDR on an OLED, especially a QD-OLED, looks fantastic in games. Using the deskto
 - **Brightness that depends on what's on screen.** OLEDs limit how bright a mostly-white screen can be (on the tested AW3423DWF a small white patch reached about 410 nits, a full white screen only about 110), so the same white changes brightness as windows open and close.
 - **Mid-whites that look off.** Watching SDR content in HDR, even through RTX Video HDR, the top of the brightness range can be stretched so that bright-but-ordinary things (white shirts, skies, UI) look either blown out or oddly flat, as if the curve were wrong.
 
-The highlight cap fixes this at the last step before the monitor. Pick a cap in nits (say 150) and a knee where the roll-off begins: everything darker than the knee is untouched, so shadows, mid-tones and colours look exactly as before, and everything brighter eases smoothly up to the cap instead of shooting past it. Because it limits the actual signal sent to the monitor, it works the same for the desktop, browsers and RTX Video HDR, and a low enough cap also keeps the monitor's own dimming from kicking in, so white stays one steady brightness. Move the sliders against your own content to fine-tune where highlights stop, then untick it when it's time to game.
+The highlight cap fixes this at the last step before the monitor. Pick a cap in nits (say 150) and a knee where the roll-off begins: everything darker than the knee is untouched, so shadows, mid-tones and colours look exactly as before, and everything brighter eases smoothly up to the cap instead of shooting past it. Because it limits the actual signal sent to the monitor, it works the same for the desktop, browsers and RTX Video HDR, and a low enough cap also keeps the monitor's own dimming from kicking in, so white stays one steady brightness. Move the sliders against your own content to fine-tune where highlights stop, then untick it when it's time to game. The optional [test patterns](test-patterns/) (grey bars and a gradient as videos) make the effect easy to see while you tune it.
 
 ## Quick start
 
@@ -182,6 +182,7 @@ The per-display scope is the captured scope, not a general multi-monitor targeti
 | `tests/test_hotkeys.py` | Combination warning and stored-hotkey validation tests |
 | `reset.py` | Emergency neutral gamma-ramp reset |
 | `selftest.py` | Interactive Windows system-state checks |
+| `test-patterns/` | Optional grey-bar and gradient test videos for seeing the cap and RTX Video HDR (see its README) |
 | `tools/` | Driver tracing, registry diagnostics and display-control probes |
 
 The self-test changes live settings and attempts to restore SDR and RTX values and a neutral gamma ramp; run it only when such changes are acceptable.
