@@ -16,7 +16,7 @@ PQ_MAX_NITS = 10000.0
 
 CAP_RANGE = (80, 1000)    # nits
 KNEE_RANGE = (50, 100)    # knee as % of the cap
-CAP_DEFAULT, KNEE_DEFAULT = 150, 70
+CAP_DEFAULT, KNEE_DEFAULT = 1000, 80
 
 
 def pq_to_nits(e):

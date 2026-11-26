@@ -58,8 +58,8 @@ For RTX Video HDR, enable Windows HDR on a compatible display, use a supported N
 | Desktop gamma | 0.30–2.80 |
 | SDR content brightness | 0–100 (nominal 80–480 nits) |
 | Windows Night Light | On/off checkbox and warmth 0–100% |
-| Highlight cap (HDR only) | On/off checkbox and cap 80–1000 nits (default 150) |
-| Cap knee | 50–100% of the cap (default 70%); shown with the resulting nits |
+| Highlight cap (HDR only) | On/off checkbox and cap 80–1000 nits (default 1000) |
+| Cap knee | 50–100% of the cap (default 80%); shown with the resulting nits |
 | RTX Video HDR | On / off |
 | RTX peak brightness | 400–1000 nits |
 | RTX middle grey | 10–100 nits |
@@ -70,7 +70,7 @@ Night Light warmth and enablement are independent: 0% is the coolest setting, **
 
 Desktop brightness and contrast here are software GPU LUT adjustments, not physical monitor brightness or OSD settings. The nit values are requested/reference levels, not measurements of physical panel luminance.
 
-**Highlight cap.** With Windows HDR on, the GPU gamma ramp acts on the PQ signal sent to the monitor, so each ramp entry corresponds to an absolute luminance. HDRDesk folds a roll-off into that ramp: luminance below the knee passes unchanged, and above it approaches (never exceeds) the cap with no visible kink. Because it sits at the end of the display path, it limits SDR desktop content and RTX Video HDR output at the same luminance. On the AW3423DWF a full-screen white field sustains only about 110 nits while small highlights reach about 400+, so a cap near that level keeps the monitor's automatic brightness limiting from kicking in and makes brightness stop depending on how much of the screen is lit. Moving the cap or knee slider switches the cap on (likewise, moving the Night Light slider switches Night Light on); **Reset cap** restores 150 nits / 70 % without changing the on/off state. The cap is applied together with brightness, contrast and gamma, is unavailable with HDR off, and like the other colour controls is not re-applied if Windows drops the LUT (sleep, mode change, HDR toggle): the checkbox then shows it as off. Values are relative to the PQ signal, not measured panel output.
+**Highlight cap.** With Windows HDR on, the GPU gamma ramp acts on the PQ signal sent to the monitor, so each ramp entry corresponds to an absolute luminance. HDRDesk folds a roll-off into that ramp: luminance below the knee passes unchanged, and above it approaches (never exceeds) the cap with no visible kink. Because it sits at the end of the display path, it limits SDR desktop content and RTX Video HDR output at the same luminance. On the AW3423DWF a full-screen white field sustains only about 110 nits while small highlights reach about 400+, so a cap near that level keeps the monitor's automatic brightness limiting from kicking in and makes brightness stop depending on how much of the screen is lit. Moving the cap or knee slider switches the cap on (likewise, moving the Night Light slider switches Night Light on); **Reset cap** restores 1000 nits / 80 % (a near-neutral starting point: only highlights above 800 nits are touched) without changing the on/off state. The cap is applied together with brightness, contrast and gamma, is unavailable with HDR off, and like the other colour controls is not re-applied if Windows drops the LUT (sleep, mode change, HDR toggle): the checkbox then shows it as off. Values are relative to the PQ signal, not measured panel output.
 
 **Reset colour** restores neutral brightness, contrast and gamma. **Reset RTX HDR** restores the application's 400 / 50 / 0 / 0 baseline without changing the RTX Video HDR enable state.
 
