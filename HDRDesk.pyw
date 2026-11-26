@@ -11,18 +11,22 @@ Keyboard    : Up/Down select slider, Left/Right nudge (1% of range), Shift = fin
 """
 import ctypes
 import json
+import queue
 import os
 import sys
 import time
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
 import displaycore as dc
 import hdrcap
+import hotkeys
 import nvescape
 import nvhdr
 import nightlight
+import presets
 import rampfit
+import toast
 
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(2)
@@ -33,7 +37,9 @@ HERE = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", 
 STATE = os.path.join(HERE, "settings.json")
 ICON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "HDRDesk.ico")
 DEFAULTS = {"brightness": 0, "contrast": 0, "gamma": 100, "x": None, "y": None, "hdr_open": False,
-            "cap_on": False, "cap_nits": hdrcap.CAP_DEFAULT, "cap_knee": hdrcap.KNEE_DEFAULT}
+            "cap_on": False, "cap_nits": hdrcap.CAP_DEFAULT, "cap_knee": hdrcap.KNEE_DEFAULT,
+            "presets": {}, "preset": "", "hotkeys": [],
+            "hotkey_toasts": True}
 RAMP_KEYS = ("brightness", "contrast", "gamma")
 
 HDR_KEYS = ("peak", "midgrey", "contrast", "saturation")
@@ -77,6 +83,7 @@ def setup_style(root):
     s.configure("NameFocus.TLabel", background=BG, foreground=ACCENT)
     s.configure("Side.NameFocus.TLabel", background=PANEL, foreground=NV)
     s.configure("Hint.TLabel", background=BG, foreground="#6a6a6a", font=("Segoe UI", 8))
+    s.configure("Section.TLabel", background=BG, foreground="#7a7a7a", font=("Segoe UI Semibold", 8))
     s.configure("Status.TLabel", background=BG, foreground=ERR, font=("Segoe UI", 8))
 
     # flat trough (from the 'default' theme) + clam thumb in accent colour, no bevels/outlines
@@ -97,6 +104,7 @@ def setup_style(root):
                 lightcolor="#333333", darkcolor="#333333", padding=(10, 3), relief="flat")
     s.map("TButton", background=[("pressed", "#262626"), ("active", "#3d3d3d")],
           lightcolor=[("active", "#3d3d3d")], darkcolor=[("active", "#3d3d3d")])
+    s.configure("Small.TButton", padding=(8, 1))
     s.configure("Side.TButton", background="#383838", lightcolor="#383838", darkcolor="#383838")
     s.map("Side.TButton", background=[("pressed", "#2a2a2a"), ("active", "#444444")])
 
@@ -106,6 +114,29 @@ def setup_style(root):
         s.map(f"{prefix}TCheckbutton", background=[("active", bg)],
               indicatorbackground=[("selected", acc), ("active", "#4a4a4a")])
     s.configure("Side.TCheckbutton", font=FONT_B)
+
+    # Preset picker: dark editable combobox (type a new name, or pick a saved one).
+    s.configure("TCombobox", fieldbackground=TROUGH, background="#333333", foreground=FG, arrowcolor=FG,
+                bordercolor="#3d3d3d", lightcolor=TROUGH, darkcolor=TROUGH, insertcolor=FG,
+                selectbackground=ACCENT, selectforeground=BG, padding=(6, 2))
+    s.map("TCombobox", fieldbackground=[("readonly", TROUGH)], background=[("active", "#3d3d3d")],
+          bordercolor=[("focus", ACCENT)])
+    root.option_add("*TCombobox*Listbox.background", PANEL)
+    root.option_add("*TCombobox*Listbox.foreground", FG)
+    root.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
+    root.option_add("*TCombobox*Listbox.selectForeground", BG)
+    root.option_add("*TCombobox*Listbox.font", FONT)
+
+    # Hotkey editor: list + entry fields.
+    s.configure("Treeview", background=PANEL, fieldbackground=PANEL, foreground=FG, bordercolor=TROUGH,
+                lightcolor=PANEL, darkcolor=PANEL, rowheight=22)
+    s.map("Treeview", background=[("selected", ACCENT)], foreground=[("selected", BG)])
+    s.configure("Treeview.Heading", background="#333333", foreground=MUTED, bordercolor=TROUGH,
+                lightcolor="#333333", darkcolor="#333333", relief="flat")
+    s.map("Treeview.Heading", background=[("active", "#3d3d3d")])
+    s.configure("TEntry", fieldbackground=TROUGH, foreground=FG, insertcolor=FG, bordercolor="#3d3d3d",
+                lightcolor=TROUGH, darkcolor=TROUGH, padding=(6, 2))
+    s.map("TEntry", bordercolor=[("focus", ACCENT)], fieldbackground=[("readonly", TROUGH)])
 
 
 def app_icon(root):
@@ -131,6 +162,21 @@ def dark_titlebar(root):
         pass
 
 
+class MessageLabel(ttk.Label):
+    """Status line that takes no space while empty (grid_remove remembers its place)."""
+
+    def configure(self, cnf=None, **kw):
+        result = super().configure(cnf, **kw)
+        if "text" in kw and self.winfo_manager() in ("grid", ""):
+            if kw["text"]:
+                self.grid()
+            else:
+                self.grid_remove()
+        return result
+
+    config = configure
+
+
 class Row:
     """One labelled slider: name | scale | value. Keeps a float position so keyboard steps are
     a constant fraction of the track regardless of the slider's range."""
@@ -147,7 +193,7 @@ class Row:
         self.scale = ttk.Scale(parent, from_=lo, to=hi, orient="horizontal", length=230,
                                style=f"{pre}Horizontal.TScale", takefocus=1)
         self.scale.set(self.value)
-        self.scale.grid(row=r, column=1, padx=8, pady=4)
+        self.scale.grid(row=r, column=1, padx=8, pady=5)
         self.val = ttk.Label(parent, text=fmt(self.value), style=f"{pre}Value.TLabel", width=13, anchor="e")
         self.val.grid(row=r, column=2, sticky="e")
         self.scale.configure(command=self._moved)
@@ -202,6 +248,222 @@ class Row:
             self.set(self.default)
 
 
+class HotkeyDialog:
+    """Edit the global hotkeys. Hotkeys are switched off while this is open, so pressing a combination
+    to record it never fires it."""
+
+    PROMPT = "Click here, then press the keys"
+
+    def __init__(self, app):
+        self.app = app
+        self.entries = [dict(e) for e in app.hotkey_entries]
+        self.vk = None
+        app.stop_hotkeys()
+        top = self.top = tk.Toplevel(app.root)
+        top.title("HDRDesk hotkeys")
+        top.configure(bg=BG)
+        top.transient(app.root)
+        top.resizable(False, False)
+        top.attributes("-topmost", app.pin.get())
+        top.protocol("WM_DELETE_WINDOW", self.close)
+        dark_titlebar(top)
+
+        frm = ttk.Frame(top, padding=(14, 12, 14, 10))
+        frm.grid(sticky="nsew")
+        lst = ttk.Frame(frm)
+        lst.grid(row=0, column=0, columnspan=4, sticky="ew")
+        self.tree = ttk.Treeview(lst, columns=("keys", "control", "action"), show="headings", height=8,
+                                 selectmode="extended")
+        for col, text, w in (("keys", "Hotkey", 170), ("control", "Slider", 130), ("action", "Action", 120)):
+            self.tree.heading(col, text=text, anchor="w")
+            self.tree.column(col, width=w, anchor="w", stretch=False)
+        self.tree.pack(fill="x")
+        self.tree.bind("<<TreeviewSelect>>", self.on_select)
+        self.tree.bind("<Button-1>", lambda e: self.tree.focus_set(), add="+")
+        self.tree.bind("<Delete>", lambda e: (self.remove(), "break")[1])
+        self.tree.bind("<Button-3>", self.on_right_click)
+        self.menu = tk.Menu(top, tearoff=0, bg=PANEL, fg=FG, activebackground=ACCENT, activeforeground=BG,
+                            bd=0, relief="flat")
+        self.menu.add_command(label="Delete", command=self.remove)
+        bar = ttk.Frame(lst)
+        bar.pack(fill="x", pady=(4, 0))
+        ttk.Label(bar, text="Right-click or press Del to delete (Ctrl/Shift+click for several)",
+                  style="Hint.TLabel").pack(side="left")
+        ttk.Button(bar, text="Delete selected", command=self.remove, takefocus=0).pack(side="right")
+
+        ttk.Label(frm, text="Keys", style="Name.TLabel").grid(row=1, column=0, sticky="w", pady=(10, 2))
+        self.key_var = tk.StringVar(value=self.PROMPT)
+        self.key_entry = ttk.Entry(frm, textvariable=self.key_var, width=30)
+        self.key_entry.grid(row=1, column=1, columnspan=3, sticky="ew", pady=(10, 2))
+        self.key_entry.bind("<KeyPress>", self.on_key)
+        self.key_entry.bind("<FocusIn>", lambda e: self.key_entry.after_idle(self.key_entry.select_clear))
+        mods = ttk.Frame(frm)
+        mods.grid(row=2, column=1, columnspan=3, sticky="w")
+        self.mod_vars = {}
+        for flag, text in ((hotkeys.MOD_CONTROL, "Ctrl"), (hotkeys.MOD_ALT, "Alt"),
+                           (hotkeys.MOD_SHIFT, "Shift"), (hotkeys.MOD_WIN, "Win")):
+            v = self.mod_vars[flag] = tk.BooleanVar()
+            ttk.Checkbutton(mods, text=text, variable=v, takefocus=0,
+                            command=self.refresh_keys).pack(side="left", padx=(0, 10))
+
+        ttk.Label(frm, text="Slider", style="Name.TLabel").grid(row=3, column=0, sticky="w", pady=(8, 2))
+        self.labels = {key: t[0] for key, t in app.hotkey_targets().items()}
+        self.by_label = {v: k for k, v in self.labels.items()}
+        self.target_var = tk.StringVar(value=next(iter(self.labels.values())))
+        tbox = ttk.Combobox(frm, textvariable=self.target_var, values=list(self.labels.values()),
+                            state="readonly", width=18)
+        tbox.grid(row=3, column=1, sticky="w", pady=(8, 2))
+        tbox.bind("<<ComboboxSelected>>", lambda e: self.refresh_hint())
+
+        ttk.Label(frm, text="Action", style="Name.TLabel").grid(row=4, column=0, sticky="w", pady=2)
+        self.mode_var = tk.StringVar(value="Nudge by")
+        act = ttk.Frame(frm)
+        act.grid(row=4, column=1, columnspan=3, sticky="w", pady=2)
+        mbox = ttk.Combobox(act, textvariable=self.mode_var, values=["Nudge by", "Set to"], state="readonly",
+                            width=9)
+        mbox.pack(side="left")
+        mbox.bind("<<ComboboxSelected>>", lambda e: self.refresh_hint())
+        self.value_var = tk.StringVar(value="5")
+        ttk.Entry(act, textvariable=self.value_var, width=8).pack(side="left", padx=(6, 0))
+        self.hint = ttk.Label(frm, text="", style="Hint.TLabel")
+        self.hint.grid(row=5, column=1, columnspan=3, sticky="w")
+
+        btns = ttk.Frame(frm)
+        btns.grid(row=6, column=0, columnspan=4, sticky="ew", pady=(10, 0))
+        ttk.Button(btns, text="Save hotkey", command=self.save, takefocus=0).pack(side="left")
+        ttk.Button(btns, text="Close", command=self.close, takefocus=0).pack(side="right")
+        ttk.Checkbutton(frm, text="Show a notification when a hotkey is used (not over fullscreen apps)",
+                        variable=app.toasts_on, command=app.save_state, takefocus=0).grid(
+            row=7, column=0, columnspan=4, sticky="w", pady=(10, 0))
+        self.msg = ttk.Label(frm, text="", style="Status.TLabel", wraplength=420)
+        self.msg.grid(row=8, column=0, columnspan=4, sticky="w", pady=(6, 0))
+
+        self.fill_tree()
+        self.refresh_hint()
+        top.grab_set()
+        self.key_entry.focus_set()
+
+    # -- helpers --
+    def mods(self):
+        return sum(f for f, v in self.mod_vars.items() if v.get())
+
+    def target(self):
+        return self.by_label[self.target_var.get()]
+
+    def fill_tree(self):
+        self.tree.delete(*self.tree.get_children())
+        for i, e in enumerate(self.entries):
+            self.tree.insert("", "end", iid=str(i), values=(hotkeys.combo_text(e["mods"], e["vk"]),
+                                                            self.labels[e["target"]], self.app.action_text(e)))
+
+    def refresh_keys(self):
+        if self.vk is None:
+            self.key_var.set(self.PROMPT)
+            return
+        self.key_var.set(hotkeys.combo_text(self.mods(), self.vk))
+        bad = hotkeys.invalid_reason(self.mods(), self.vk)
+        note = hotkeys.warning(self.mods(), self.vk)
+        self.msg.configure(text=f"{bad}." if bad else f"Heads up: {note}. You can still save it." if note else "")
+
+    def refresh_hint(self):
+        label, lo, hi, scale = self.app.hotkey_targets()[self.target()]
+        fmt = (lambda v: f"{v / scale:.2f}") if scale != 1 else str
+        if self.mode_var.get() == "Set to":
+            self.hint.configure(text=f"{label}: a value from {fmt(lo)} to {fmt(hi)}")
+        else:
+            step = "0.05" if scale != 1 else "5"
+            self.hint.configure(text=f"{label}: amount to add, e.g. {step} or -{step} (range {fmt(lo)} to {fmt(hi)})")
+
+    def on_key(self, e):
+        vk = e.keycode
+        if vk in hotkeys.MODIFIER_VKS:
+            return "break"
+        u = ctypes.windll.user32
+        down = lambda *vks: any(u.GetAsyncKeyState(k) & 0x8000 for k in vks)  # noqa: E731
+        for flag, vks in ((hotkeys.MOD_CONTROL, (0x11,)), (hotkeys.MOD_ALT, (0x12,)),
+                          (hotkeys.MOD_SHIFT, (0x10,)), (hotkeys.MOD_WIN, (0x5B, 0x5C))):
+            self.mod_vars[flag].set(down(*vks))
+        self.vk = vk
+        self.refresh_keys()
+        return "break"
+
+    def on_right_click(self, e):
+        row = self.tree.identify_row(e.y)
+        if not row:
+            return
+        if row not in self.tree.selection():  # right-clicking outside the selection selects that row
+            self.tree.selection_set(row)
+        self.tree.focus_set()
+        self.menu.entryconfigure(0, label="Delete" if len(self.tree.selection()) == 1
+                                 else f"Delete {len(self.tree.selection())} hotkeys")
+        self.menu.tk_popup(e.x_root, e.y_root)
+
+    def on_select(self, _e=None):
+        sel = self.tree.selection()
+        if len(sel) != 1:  # load a hotkey into the form only when exactly one is selected
+            return
+        e = self.entries[int(sel[0])]
+        self.vk = e["vk"]
+        for flag, v in self.mod_vars.items():
+            v.set(bool(e["mods"] & flag))
+        self.refresh_keys()
+        self.target_var.set(self.labels[e["target"]])
+        self.mode_var.set("Set to" if e["mode"] == "set" else "Nudge by")
+        scale = self.app.hotkey_targets()[e["target"]][3]
+        self.value_var.set(f"{e['value'] / scale:g}")
+        self.refresh_hint()
+
+    # -- actions --
+    def save(self):
+        if self.vk is None:
+            self.msg.configure(text="Click the Keys box and press the combination first.")
+            return
+        mods = self.mods()
+        bad = hotkeys.invalid_reason(mods, self.vk)
+        if bad:
+            self.msg.configure(text=f"{bad}.")
+            return
+        label, lo, hi, scale = self.app.hotkey_targets()[self.target()]
+        try:
+            raw = round(float(self.value_var.get().replace(",", ".")) * scale)
+        except ValueError:
+            self.msg.configure(text="Enter a number for the value.")
+            return
+        mode = "set" if self.mode_var.get() == "Set to" else "nudge"
+        if mode == "set" and not lo <= raw <= hi:
+            self.msg.configure(text=f"{label} goes from {lo / scale:g} to {hi / scale:g}.")
+            return
+        if mode == "nudge" and (raw == 0 or abs(raw) > hi - lo):
+            self.msg.configure(text=f"Nudge by a non-zero amount up to {(hi - lo) / scale:g}.")
+            return
+        entry = {"mods": mods, "vk": self.vk, "target": self.target(), "mode": mode, "value": raw}
+        same = [i for i, e in enumerate(self.entries) if (e["mods"], e["vk"]) == (mods, self.vk)]
+        if same:
+            self.entries[same[0]] = entry  # same keys: update that hotkey
+        else:
+            self.entries.append(entry)
+        self.fill_tree()
+        self.msg.configure(text="")
+        self.app.set_hotkeys(self.entries)
+
+    def remove(self):
+        sel = self.tree.selection()
+        if not sel:
+            self.msg.configure(text="Select a hotkey in the list to delete it.")
+            return
+        drop = {int(i) for i in sel}
+        self.entries = [e for i, e in enumerate(self.entries) if i not in drop]
+        self.fill_tree()
+        self.msg.configure(text="")
+        self.app.set_hotkeys(self.entries)
+
+    def close(self):
+        self.top.grab_release()
+        self.top.destroy()
+        self.app.hotkey_dialog = None
+        self.app.start_hotkeys()
+
+
 class App:
     def __init__(self, root):
         self.root = root
@@ -243,23 +505,29 @@ class App:
 
         frm = ttk.Frame(root, padding=(14, 12, 14, 10))
         frm.grid(row=0, column=0, sticky="nsew")
-        ttk.Label(frm, text=self.disp.friendly or "Primary display", style="Head.TLabel").grid(
-            row=0, column=0, columnspan=3, sticky="w", pady=(0, 6))
+        head = ttk.Frame(frm)
+        head.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 6))
+        ttk.Label(head, text=self.disp.friendly or "Primary display", style="Head.TLabel").pack(side="left")
+        self.hdr_btn = ttk.Button(head, text="RTX HDR  ▸", width=10, style="Small.TButton", command=self.toggle_hdr_panel,
+                                  takefocus=0)
+        self.hdr_btn.pack(side="right")
 
         specs = [("brightness", "Brightness", -100, 100, fmt_signed, 0),
                  ("contrast", "Contrast", -100, 100, fmt_signed, 0),
                  ("gamma", "Gamma", 30, 280, lambda v: f"{v / 100:.2f}", 100)]
-        for r, (key, text, lo, hi, fmt, dflt) in enumerate(specs, start=1):
+        for r, (key, text, lo, hi, fmt, dflt) in enumerate(specs, start=3):
             self.rows[key] = Row(self, frm, r, key, text, lo, hi, fmt,
-                                 self.ramp_values[r - 1], dflt, self.on_ramp_change)
+                                 self.ramp_values[r - 3], dflt, self.on_ramp_change)
         if self.ramp_unknown:
             for key in ("brightness", "contrast", "gamma"):
                 self.rows[key].val.configure(text="Unknown")
+        ttk.Button(frm, text="Reset colour", style="Small.TButton", command=self.reset_ramp, takefocus=0).grid(
+            row=6, column=1, columnspan=2, sticky="e", pady=(2, 0))
 
         ac = self.disp.advanced_color()
         sdr_now = round((self.disp.sdr_white_nits() - 80) / 4)
-        self.rows["sdr"] = Row(self, frm, 6, "sdr", "SDR content", 0, 100,
-                               lambda v: f"{v} · {80 + 4 * v} nits", sdr_now, None, self.on_sdr_change)
+        self.rows["sdr"] = Row(self, frm, 11, "sdr", "SDR content", 0, 100,
+                               lambda v: f"{80 + 4 * v} nits", sdr_now, None, self.on_sdr_change)
         if not ac["enabled"]:
             self.rows["sdr"].set_enabled(False)
             self.rows["sdr"].val.configure(text="HDR off")
@@ -273,54 +541,75 @@ class App:
             nl = {"enabled": False, "strength": 0}
             self.night_available = False
             self.night_error = f"Night Light unavailable: {exc}"
-        self.rows["night"] = Row(self, frm, 4, "night", "Night Light", 0, 100,
+        self.rows["night"] = Row(self, frm, 8, "night", "Night Light", 0, 100,
                                   lambda v: f"{v} %", nl["strength"], None, self.on_night_change)
         self.night_on = tk.BooleanVar(value=nl["enabled"])
         self.rows["night"].name.grid_remove()
         self.night_toggle = ttk.Checkbutton(frm, text="Night Light", variable=self.night_on,
                                             command=self.on_night_toggle, takefocus=0)
-        self.night_toggle.grid(row=4, column=0, sticky="w")
+        self.night_toggle.grid(row=8, column=0, sticky="w")
         if not self.night_available:
             self.rows["night"].set_enabled(False)
             self.rows["night"].val.configure(text="Unavailable")
             self.night_toggle.state(["disabled"])
 
         # Highlight cap (HDR only): soft nits ceiling in the GPU LUT, on the PQ signal itself.
-        self.rows["cap"] = Row(self, frm, 7, "cap", "Highlight cap", *hdrcap.CAP_RANGE,
+        self.rows["cap"] = Row(self, frm, 12, "cap", "Highlight cap", *hdrcap.CAP_RANGE,
                                lambda v: f"{v} nits", self.state["cap_nits"], hdrcap.CAP_DEFAULT,
                                self.on_cap_change)
-        self.rows["knee"] = Row(self, frm, 8, "knee", "Cap knee", *hdrcap.KNEE_RANGE,
+        self.rows["knee"] = Row(self, frm, 13, "knee", "Cap knee", *hdrcap.KNEE_RANGE,
                                 lambda v: f"{v}%·{self.rows['cap'].value * v // 100} nits",
                                 self.state["cap_knee"], hdrcap.KNEE_DEFAULT, self.on_cap_change)
         self.cap_on = tk.BooleanVar(value=live_cap)
         self.rows["cap"].name.grid_remove()
         self.cap_toggle = ttk.Checkbutton(frm, text="Highlight cap", variable=self.cap_on,
                                           command=self.on_cap_toggle, takefocus=0)
-        self.cap_toggle.grid(row=7, column=0, sticky="w")
+        self.cap_toggle.grid(row=12, column=0, sticky="w")
+        self.cap_reset_btn = ttk.Button(frm, text="Reset cap", style="Small.TButton", command=self.reset_cap,
+                                        takefocus=0)
+        self.cap_reset_btn.grid(row=14, column=1, columnspan=2, sticky="e", pady=(2, 0))
+        ttk.Label(frm, text="HDR", style="Section.TLabel").grid(row=10, column=0, sticky="w", pady=(0, 1))
         self.cap_available = None
         self.update_cap_available(ac["enabled"])
-        frm.grid_rowconfigure(5, minsize=10)  # gap: desktop colour / Night Light above, HDR controls below
+        # Layout: 3-6 desktop colour | 8 Night Light | 10-14 HDR group | 16 presets | 18-21 bottom; gaps between.
+        for gap in (7, 9, 15, 17):
+            frm.grid_rowconfigure(gap, minsize=14)
         # Up/Down follows the visual order.
         self.rows = {k: self.rows[k] for k in ("brightness", "contrast", "gamma", "night", "sdr", "cap", "knee")}
 
-        btns = ttk.Frame(frm)
-        btns.grid(row=9, column=0, columnspan=3, pady=(10, 0), sticky="ew")
-        ttk.Button(btns, text="Reset colour", command=self.reset_ramp, takefocus=0).pack(side="left")
-        self.cap_reset_btn = ttk.Button(btns, text="Reset cap", command=self.reset_cap, takefocus=0)
-        self.cap_reset_btn.pack(side="left", padx=(6, 0))
-        self.cap_reset_btn.state(["!disabled"] if self.cap_available else ["disabled"])
-        self.hdr_btn = ttk.Button(btns, text="RTX HDR  ▸", command=self.toggle_hdr_panel, takefocus=0)
-        self.hdr_btn.pack(side="left", padx=6)
-        self.pin = tk.BooleanVar(value=True)
-        ttk.Checkbutton(btns, text="On top", variable=self.pin, takefocus=0,
-                        command=lambda: root.attributes("-topmost", self.pin.get())).pack(side="right")
+        # Presets: pick one to apply it; type a name and Save to store the current settings.
+        self.presets = presets.PresetStore(self.state.get("presets"))
+        pre = ttk.Frame(frm)
+        pre.grid(row=16, column=0, columnspan=3, sticky="ew")
+        ttk.Label(pre, text="Preset", style="Name.TLabel", width=12).pack(side="left")
+        last = self.state.get("preset", "")
+        self.preset_var = tk.StringVar(value=last if last in self.presets.items else "")
+        self.preset_box = ttk.Combobox(pre, textvariable=self.preset_var, values=self.presets.names(),
+                                       width=20, takefocus=0)
+        self.preset_box.pack(side="left", padx=(8, 6), fill="x", expand=True)
+        self.preset_box.bind("<<ComboboxSelected>>", lambda e: self.load_preset(self.preset_var.get()))
+        self.preset_box.bind("<Return>", lambda e: self.save_preset())
+        ttk.Button(pre, text="Save", width=5, style="Small.TButton", command=self.save_preset,
+                   takefocus=0).pack(side="left")
+        ttk.Button(pre, text="Delete", width=6, style="Small.TButton", command=self.delete_preset,
+                   takefocus=0).pack(side="left", padx=(6, 0))
 
+        bottom = ttk.Frame(frm)
+        bottom.grid(row=18, column=0, columnspan=3, sticky="ew")
+        ttk.Button(bottom, text="Hotkeys…", style="Small.TButton", command=self.open_hotkeys,
+                   takefocus=0).pack(side="left")
+        self.pin = tk.BooleanVar(value=True)
+        ttk.Checkbutton(bottom, text="Always on top", variable=self.pin, takefocus=0,
+                        command=lambda: root.attributes("-topmost", self.pin.get())).pack(side="right")
         ttk.Label(frm, text="↑↓ select   ←→ adjust   Shift fine   Ctrl coarse   hold to slide   Del default",
-                  style="Hint.TLabel").grid(row=10, column=0, columnspan=3, sticky="w", pady=(8, 0))
-        self.status = ttk.Label(frm, text=self.night_error, style="Status.TLabel")
-        self.status.grid(row=11, column=0, columnspan=3, sticky="w")
-        self.ramp_notice = ttk.Label(frm, text=self.ramp_warning, style="Status.TLabel")
-        self.ramp_notice.grid(row=12, column=0, columnspan=3, sticky="w")
+                  style="Hint.TLabel").grid(row=19, column=0, columnspan=3, sticky="w", pady=(10, 0))
+
+        self.status = MessageLabel(frm, text=self.night_error, style="Status.TLabel")
+        self.status.grid(row=20, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        self.status.configure(text=self.night_error)
+        self.ramp_notice = MessageLabel(frm, text=self.ramp_warning, style="Status.TLabel")
+        self.ramp_notice.grid(row=21, column=0, columnspan=3, sticky="w")
+        self.ramp_notice.configure(text=self.ramp_warning)
 
         self._build_hdr_panel(root)
         if self.state.get("hdr_open"):
@@ -330,6 +619,14 @@ class App:
         self.sliders = {k: r.scale for k, r in self.rows.items()}
         self.side_rows = {r.key: r for r in self.hdr_rows}
         self.sliders.update({r.key: r.scale for r in self.hdr_rows})
+
+        # Global hotkeys (registered on their own thread; presses are handled here via a queue).
+        self.hotkey_queue, self.hotkey_listener, self.hotkey_dialog = queue.Queue(), None, None
+        self.toasts_on = tk.BooleanVar(value=bool(self.state.get("hotkey_toasts", True)))
+        self.toast = toast.Toast(root, bg=PANEL, fg=FG, muted=MUTED, accent=ACCENT, trough=TROUGH)
+        self.hotkey_entries = hotkeys.normalize(self.state.get("hotkeys"), self.hotkey_targets())
+        self.start_hotkeys()
+        root.after(30, self.poll_hotkeys)
 
         # Merely opening HDRDesk must not change the system's display LUT.
         dark_titlebar(root)
@@ -685,15 +982,200 @@ class App:
                 pass
         self.root.after(2000, self.watchdog)
 
+    # ---- global hotkeys: nudge a slider, or set it to a value ----
+    def hotkey_rows(self):
+        return {**self.rows, **{r.key: r for r in self.hdr_rows}}
+
+    def hotkey_targets(self):
+        """key -> (label, lo, hi, scale); values are stored in raw slider units (gamma x100)."""
+        labels = {"brightness": "Brightness", "contrast": "Contrast", "gamma": "Gamma", "night": "Night Light",
+                  "sdr": "SDR content", "cap": "Highlight cap", "knee": "Cap knee", "hdr_peak": "RTX peak",
+                  "hdr_midgrey": "RTX middle grey", "hdr_contrast": "RTX contrast",
+                  "hdr_saturation": "RTX saturation"}
+        rows = self.hotkey_rows()
+        return {k: (labels[k], rows[k].lo, rows[k].hi, 100 if k == "gamma" else 1) for k in labels if k in rows}
+
+    def action_text(self, e):
+        scale = self.hotkey_targets()[e["target"]][3]
+        v = e["value"] / scale
+        num = f"{v:.2f}" if scale != 1 else f"{e['value']}"
+        if e["mode"] == "set":
+            return f"Set to {num}"
+        return f"Nudge {'+' if v > 0 else ''}{num}"
+
+    def start_hotkeys(self):
+        self.stop_hotkeys()
+        if self.hotkey_entries:
+            entries = list(self.hotkey_entries)
+            self.hotkey_listener = hotkeys.Listener(
+                entries, lambda i: self.hotkey_queue.put(("press", entries[i])),
+                lambda bad: self.hotkey_queue.put(("failed", [entries[i] for i in bad])))
+
+    def stop_hotkeys(self):
+        if self.hotkey_listener is not None:
+            self.hotkey_listener.stop()
+            self.hotkey_listener = None
+
+    def set_hotkeys(self, entries):
+        self.hotkey_entries = hotkeys.normalize(entries, self.hotkey_targets())
+        self.save_state()
+
+    def open_hotkeys(self):
+        if self.hotkey_dialog is None:
+            self.hotkey_dialog = HotkeyDialog(self)
+        else:
+            self.hotkey_dialog.top.lift()
+
+    def poll_hotkeys(self):
+        try:
+            while True:
+                kind, data = self.hotkey_queue.get_nowait()
+                if kind == "press":
+                    self.run_hotkey(data)
+                else:
+                    names = ", ".join(hotkeys.combo_text(e["mods"], e["vk"]) for e in data)
+                    self.status.configure(text=f"Windows or another app owns this hotkey: {names}")
+        except queue.Empty:
+            pass
+        self.root.after(30, self.poll_hotkeys)
+
+    def run_hotkey(self, e):
+        row = self.hotkey_rows().get(e["target"])
+        if row is None:
+            return
+        label = self.hotkey_targets()[e["target"]][0]
+        if not row.enabled:
+            self.status.configure(text=f"{label} is unavailable right now")
+            self.notify(label, "Unavailable")
+            return
+        row.set(row.value + e["value"] if e["mode"] == "nudge" else e["value"])
+        self.notify(label, row.fmt(row.value), (row.value - row.lo) / (row.hi - row.lo))
+
+    def notify(self, title, value, fraction=None):
+        """Hotkey feedback toast: optional, and never over a fullscreen game / video."""
+        if not self.toasts_on.get():
+            return
+        if toast.fullscreen_active(own_hwnds=(self.toast.hwnd(),)):
+            self.toast.hide()
+            return
+        self.toast.show(title, value, fraction)
+
+    # ---- presets: named snapshots of every control ----
+    def capture_preset(self):
+        p = {k: self.rows[k].value for k in RAMP_KEYS}
+        p.update(cap_on=self.cap_on.get(), cap_nits=self.rows["cap"].value, cap_knee=self.rows["knee"].value)
+        if self.night_available:
+            p.update(night_on=self.night_on.get(), night=self.rows["night"].value)
+        if self.disp.advanced_color()["enabled"]:
+            p["sdr"] = self.rows["sdr"].value
+        if self.hdr_available:
+            p["rtx_on"] = self.hdr_on.get()
+            p.update({"rtx_" + r.key[4:]: r.value for r in self.hdr_rows})
+        return p
+
+    def apply_preset(self, p):
+        """Set every control the preset holds, then push each group to the system once.
+        Parts that can't apply right now (HDR off, Night Light / RTX unavailable) are skipped."""
+        self.cancel_repeat()
+        # Desktop colour + highlight cap: one LUT write.
+        if any(k in p for k in RAMP_KEYS + ("cap_on", "cap_nits", "cap_knee")):
+            for key, pkey in (("brightness", "brightness"), ("contrast", "contrast"), ("gamma", "gamma"),
+                              ("cap", "cap_nits"), ("knee", "cap_knee")):
+                if pkey in p:
+                    self.rows[key].set(p[pkey], notify=False)
+            if "cap_on" in p:
+                self.cap_on.set(p["cap_on"])
+            if self.cap_available:
+                for key in ("cap", "knee"):
+                    self.rows[key].val.configure(text=self.rows[key].fmt(self.rows[key].value))
+            self.ramp_unknown = False
+            self.ramp_notice.configure(text="")
+            for key in RAMP_KEYS:
+                self.rows[key].val.configure(text=self.rows[key].fmt(self.rows[key].value))
+            self.apply_ramp()
+        if "sdr" in p and self.disp.advanced_color()["enabled"]:
+            self.rows["sdr"].set(p["sdr"], notify=False)
+            self.apply_sdr()
+        if self.night_available and ("night" in p or "night_on" in p):
+            if self.pending_night is not None:
+                self.root.after_cancel(self.pending_night)
+                self.pending_night = None
+            try:
+                cur = self.night_ctl.read()
+                if "night" in p:
+                    self.rows["night"].set(p["night"], notify=False)
+                    if cur["strength"] != p["night"]:
+                        self.night_ctl.set_strength(p["night"])
+                if "night_on" in p:
+                    self.night_on.set(p["night_on"])
+                    if cur["enabled"] != p["night_on"]:
+                        self.night_ctl.set_enabled(p["night_on"])
+                self.night_last_apply = time.monotonic()
+            except (OSError, ValueError) as exc:
+                self.status.configure(text=f"Night Light: {exc}")
+        if self.hdr_available and any(k.startswith("rtx_") for k in p):
+            if "rtx_on" in p:
+                self.hdr_on.set(p["rtx_on"])
+            for r in self.hdr_rows:
+                if "rtx_" + r.key[4:] in p:
+                    r.set(p["rtx_" + r.key[4:]], notify=False)
+            self.apply_hdr()
+
+    def load_preset(self, name):
+        p = self.presets.get(name)
+        if p:
+            self.preset_var.set(name)
+            self.apply_preset(p)
+            self.save_state()  # remember the last-used preset
+        self.rows["brightness"].scale.focus_set()  # keep arrow keys on the sliders
+
+    def save_preset(self):
+        name = presets.clean_name(self.preset_var.get())
+        if not name:
+            self.status.configure(text="Type a name in the Preset box, then Save.")
+            return "break"
+        name = self.presets.save(name, self.capture_preset())
+        self.preset_box.configure(values=self.presets.names())
+        self.preset_var.set(name)
+        self.status.configure(text="")
+        self.save_state()
+        self.rows["brightness"].scale.focus_set()
+        return "break"
+
+    def delete_preset(self):
+        name = self.preset_var.get()
+        if name not in self.presets.items:
+            self.status.configure(text="Pick a saved preset to delete.")
+            return
+        if not messagebox.askyesno("HDRDesk", f'Delete preset "{name}"?', parent=self.root):
+            return
+        self.presets.delete(name)
+        self.preset_box.configure(values=self.presets.names())
+        self.preset_var.set("")
+        self.status.configure(text="")
+        self.save_state()
+
+    def save_state(self):
+        data = {k: self.rows[k].value for k in RAMP_KEYS}
+        data.update(x=self.root.winfo_x(), y=self.root.winfo_y(), hdr_open=self.hdr_open,
+                    cap_on=self.cap_on.get(), cap_nits=self.rows["cap"].value, cap_knee=self.rows["knee"].value,
+                    presets=self.presets.to_json(), hotkeys=self.hotkey_entries,
+                    hotkey_toasts=self.toasts_on.get(),
+                    preset=self.preset_var.get() if self.preset_var.get() in self.presets.items else "")
+        tmp = STATE + ".tmp"
+        try:
+            with open(tmp, "w") as f:
+                json.dump(data, f, indent=1)
+            os.replace(tmp, STATE)  # never leave a half-written settings.json (presets live there)
+        except OSError as exc:
+            self.status.configure(text=f"Could not save settings: {exc}")
+
     def on_close(self):
         if self.pending_night is not None:
             self.root.after_cancel(self.pending_night)
             self.apply_night()
-        data = {k: self.rows[k].value for k in ("brightness", "contrast", "gamma")}
-        data.update(x=self.root.winfo_x(), y=self.root.winfo_y(), hdr_open=self.hdr_open,
-                    cap_on=self.cap_on.get(), cap_nits=self.rows["cap"].value, cap_knee=self.rows["knee"].value)
-        with open(STATE, "w") as f:
-            json.dump(data, f)
+        self.stop_hotkeys()
+        self.save_state()
         self.root.destroy()
 
 

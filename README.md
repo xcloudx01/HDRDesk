@@ -16,6 +16,8 @@ Adjust desktop brightness, contrast, gamma, Windows SDR content brightness, Wind
 - **Windows Night Light:** adjust native warmth (0–100%) and switch Night Light on or off independently, preserving Windows scheduling.
 - **RTX Video HDR:** enable or disable SDR-to-HDR video conversion and adjust peak brightness, middle grey, contrast and saturation live.
 - **Always-on-top window:** tune against the content itself; collapse the RTX panel when not needed.
+- **Presets:** save your favourite combination of settings under a name ("Night", "Gaming", "Movies"…) and switch between them from a drop-down in one click.
+- **Global hotkeys:** bind a key combination to any slider, either to nudge it up or down by an amount you choose or to jump straight to a value. Works while other apps (games, videos) have focus; any combination can be used, with a heads-up for ones Windows or other apps already rely on.
 - **Keyboard control:** select and adjust sliders without repeatedly reaching for the mouse.
 - **State synchronization:** read the active GPU gamma ramp at startup and follow external LUT changes without overwriting them; also follow external changes to SDR white level, Windows Night Light and RTX Video HDR settings.
 - **Lightweight:** Python standard library only for the main application; no administrator elevation needed for the live RTX Video HDR control path on the tested configuration.
@@ -60,6 +62,8 @@ For RTX Video HDR, enable Windows HDR on a compatible display, use a supported N
 | Windows Night Light | On/off checkbox and warmth 0–100% |
 | Highlight cap (HDR only) | On/off checkbox and cap 80–1000 nits (default 1000) |
 | Cap knee | 50–100% of the cap (default 80%); shown with the resulting nits |
+| Hotkeys… | Opens the hotkey editor: press a combination, pick a slider, choose **Nudge by** an amount or **Set to** a value; delete with Del, right-click or **Delete selected** |
+| Preset | Pick a saved preset to apply it; type a name and **Save** to store the current settings; **Delete** removes the selected one |
 | RTX Video HDR | On / off |
 | RTX peak brightness | 400–1000 nits |
 | RTX middle grey | 10–100 nits |
@@ -72,7 +76,15 @@ Desktop brightness and contrast here are software GPU LUT adjustments, not physi
 
 **Highlight cap.** With Windows HDR on, the GPU gamma ramp acts on the PQ signal sent to the monitor, so each ramp entry corresponds to an absolute luminance. HDRDesk folds a roll-off into that ramp: luminance below the knee passes unchanged, and above it approaches (never exceeds) the cap with no visible kink. Because it sits at the end of the display path, it limits SDR desktop content and RTX Video HDR output at the same luminance. On the AW3423DWF a full-screen white field sustains only about 110 nits while small highlights reach about 400+, so a cap near that level keeps the monitor's automatic brightness limiting from kicking in and makes brightness stop depending on how much of the screen is lit. Moving the cap or knee slider switches the cap on (likewise, moving the Night Light slider switches Night Light on); **Reset cap** restores 1000 nits / 80 % (a near-neutral starting point: only highlights above 800 nits are touched) without changing the on/off state. The cap is applied together with brightness, contrast and gamma, is unavailable with HDR off, and like the other colour controls is not re-applied if Windows drops the LUT (sleep, mode change, HDR toggle): the checkbox then shows it as off. Values are relative to the PQ signal, not measured panel output.
 
-**Reset colour** restores neutral brightness, contrast and gamma. **Reset RTX HDR** restores the application's 400 / 50 / 0 / 0 baseline without changing the RTX Video HDR enable state.
+**Hotkeys.** Click **Hotkeys…**, click the Keys box and press the combination you want (the Ctrl/Alt/Shift/Win boxes fill in automatically and can be adjusted), pick a slider, then choose **Nudge by** (an amount to add; negative to lower; gamma in decimals such as 0.05) or **Set to** (a value within the slider's range) and press **Save hotkey**. Saving a combination that already exists updates it; to delete hotkeys, select one or several in the list (Ctrl/Shift+click) and press **Del**, right-click and choose **Delete**, or use **Delete selected** under the list. Hotkeys work system-wide while HDRDesk is running, repeat while held, and are paused while the editor is open so recording a combination never triggers it. A nudge stops at the slider's limits; moving the Night Light or highlight-cap slider this way switches that feature on, as dragging it does. Controls that are unavailable at the time (for example HDR-only ones with HDR off) are skipped with a note.
+
+Any combination can be used. When you record one that Windows or most apps already rely on (for example Alt+Tab, Win+Alt+B for the HDR toggle, Win+Ctrl+Shift+B for the graphics-driver reset, plain Win+key shortcuts, a key with no modifier, or a letter with a single modifier such as Ctrl+C), the editor shows a short heads-up about what it will override, but still lets you save it. Some combinations, such as Ctrl+Alt+Del or ones another program already owns, Windows will not hand over; HDRDesk then says the hotkey could not be registered instead of taking it over.
+
+**Hotkey notifications.** Each hotkey press shows a small notification near the bottom of the screen with the slider's name, its new value and a position bar; repeated presses update it in place and it fades after about a second and a half. It never takes focus or blocks clicks, and it stays hidden while a fullscreen app is in front (games, fullscreen video, presentations), so it can't interrupt them. Turn it off with **Show a notification when a hotkey is used** in the hotkey editor.
+
+**Presets.** A preset stores every control: brightness, contrast, gamma, Night Light (on/off and warmth), SDR content brightness, the highlight cap (on/off, cap and knee) and RTX Video HDR (on/off and its four sliders). To save one, type a name in the **Preset** box and press **Save** (or Enter); saving under an existing name (in any letter case) overwrites it. Pick a preset from the drop-down to apply it at once; **Delete** removes the selected preset after a confirmation. Parts that can't apply at the moment are skipped (for example SDR brightness and the cap while HDR is off, or RTX settings without a supported NVIDIA driver). Presets are stored in `settings.json`, which is written atomically whenever a preset changes.
+
+**Reset colour** (under the colour sliders) restores neutral brightness, contrast and gamma; **Reset cap** (under the HDR group) restores the highlight-cap defaults; **Always on top** keeps the window above others. **Reset RTX HDR** restores the application's 400 / 50 / 0 / 0 baseline without changing the RTX Video HDR enable state.
 
 ### Keyboard
 
@@ -157,12 +169,17 @@ The per-display scope is the captured scope, not a general multi-monitor targeti
 | `displaycore.py` | Windows DisplayConfig and GPU gamma ramp |
 | `rampfit.py` | Read-only inference of desktop brightness, contrast and gamma from the live LUT |
 | `hdrcap.py` | PQ conversion and the highlight-cap roll-off curve |
+| `presets.py` | Named preset storage with tolerant loading of `settings.json` |
+| `hotkeys.py` | Combination warnings and the global hotkey listener (`RegisterHotKey`) |
+| `toast.py` | Hotkey notification window and fullscreen-app detection |
 | `nvescape.py` | Live RTX Video HDR driver requests |
 | `nvhdr.py` | NVIDIA settings discovery, registry read and persistence-only helper |
 | `nightlight.py` | Native Windows Night Light strength and on/off bridge |
 | `tests/test_nightlight.py` | Mock-registry codec tests without touching real Night Light settings |
 | `tests/test_rampfit.py` | Cross-platform LUT inference and custom-curve regression tests |
 | `tests/test_hdrcap.py` | PQ round trip, roll-off shape and capped-ramp tests |
+| `tests/test_presets.py` | Preset save/overwrite/delete and malformed-settings tests |
+| `tests/test_hotkeys.py` | Combination warning and stored-hotkey validation tests |
 | `reset.py` | Emergency neutral gamma-ramp reset |
 | `selftest.py` | Interactive Windows system-state checks |
 | `tools/` | Driver tracing, registry diagnostics and display-control probes |
