@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release tag (e.g. v0.1.1)'
+        description: 'Release tag (e.g. v0.2.0)'
         required: true
         type: string
 
@@ -53,8 +53,12 @@ jobs:
           Portable Windows x64 executable. No separate Python installation required.
 
           - Desktop brightness, contrast and gamma controls
+          - Windows Night Light warmth and on/off
           - Windows HDR SDR content brightness
+          - Highlight cap: a soft nits ceiling for HDR that also limits RTX Video HDR output
           - Live NVIDIA RTX Video HDR controls
+          - Presets: save and switch between named combinations of settings
+          - Global hotkeys to nudge or set any slider, with optional on-screen notifications
           - Compact always-on-top interface with keyboard navigation
 
           Download HDRDesk.exe and run it from a writable folder. The executable is unsigned. See the README for compatibility and driver limitations. The build is format-validated; physical HDR/display behavior has not been tested on the CI runner.

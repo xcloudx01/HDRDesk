@@ -1,8 +1,10 @@
-"""Monitor Sliders: floating always-on-top display control for the primary monitor.
+"""HDRDesk: floating always-on-top display control for the primary monitor.
 
 Main panel  : Brightness / Contrast / Gamma (GPU gamma LUT, like NVCP 'Adjust desktop colour settings')
-              + Windows SDR content brightness (HDR mode) + Windows Night Light warmth/on-off
-              + highlight cap (HDR mode): soft nits ceiling folded into the same GPU LUT (see hdrcap.py).
+              + Windows Night Light warmth/on-off
+              + HDR group: Windows SDR content brightness and the highlight cap (soft nits ceiling folded
+                into the same GPU LUT, see hdrcap.py)
+              + presets (presets.py) and global hotkeys with optional notifications (hotkeys.py, toast.py).
 Side panel  : RTX Video HDR (NVIDIA App > System > Video > HDR), applied live through the same
               driver escape the NVIDIA App uses (see nvescape.py).
 
